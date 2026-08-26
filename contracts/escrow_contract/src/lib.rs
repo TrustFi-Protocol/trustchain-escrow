@@ -974,10 +974,43 @@ pub struct EscrowContract;
 impl EscrowContract {
     // ── Initialization ────────────────────────────────────────────────────────
 
+    /// Initializes the contract with a single admin address.
+    ///
+    /// This function must be called exactly once before any other contract operations.
+    /// It sets up the contract's initial state, including the admin address and TTL.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment
+    /// * `admin` - The address that will have administrative privileges
+    ///
+    /// # Returns
+    /// Returns `Ok(())` on successful initialization, or an error if the contract
+    /// is already initialized or if the admin address is invalid.
+    ///
+    /// # Panics
+    /// Panics if the admin address is malformed or if storage operations fail.
     pub fn initialize(env: Env, admin: Address) -> Result<(), EscrowError> {
         ContractStorage::initialize(&env, &admin)
     }
 
+    /// Configures multi-signature authorization for admin operations.
+    ///
+    /// Allows setting up an m-of-n multisig scheme where `threshold` out of
+    /// `admin_signers.len()` signers must authorize sensitive operations.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment
+    /// * `caller` - The address attempting to set the multisig config (must be admin)
+    /// * `admin_signers` - Vector of addresses that form the multisig set
+    /// * `threshold` - Number of signatures required (1 <= threshold <= admin_signers.len())
+    ///
+    /// # Returns
+    /// Returns `Ok(())` on success, or:
+    /// - `EscrowError::E63` if threshold is 0 or greater than the number of signers
+    /// - Other errors if the caller is not the admin
+    ///
+    /// # Authorization
+    /// Caller must be the current admin and must provide authentication.
     pub fn set_admin_multisig(
         env: Env,
         caller: Address,
@@ -999,6 +1032,10 @@ impl EscrowContract {
         Ok(())
     }
 
+    /// Freezes an active escrow, preventing all operations except unfreezing.
+    ///
+    /// A frozen escrow cannot process milestones, releases, or cancellations
+    /// until it is explicitly unfrozen. Typically used for compliance or dispute holds.
     pub fn freeze_escrow(
         env: Env,
         escrow_id: u64,
@@ -1041,6 +1078,19 @@ impl EscrowContract {
         Ok(())
     }
 
+    /// Unfreezes a previously frozen escrow, restoring normal operations.
+    ///
+    /// Once unfrozen, the escrow can process milestones and other operations normally.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment
+    /// * `escrow_id` - The unique identifier of the escrow to unfreeze
+    /// * `admin_signers` - The admin signatures authorizing the unfreeze (must meet threshold)
+    ///
+    /// # Returns
+    /// Returns `Ok(())` on success, or:
+    /// - `EscrowError::E62` if the multisig authorization fails
+    /// - Other errors if the escrow is not found or not live
     pub fn unfreeze_escrow(
         env: Env,
         escrow_id: u64,
@@ -1540,6 +1590,18 @@ impl EscrowContract {
         Ok((client_amount, freelancer_amount, collected_fee))
     }
 
+    /// Sets the platform treasury address where fees are collected.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment
+    /// * `caller` - The address setting the treasury (must be admin)
+    /// * `treasury` - The address that will receive platform fees
+    ///
+    /// # Returns
+    /// Returns `Ok(())` on success, or an error if the caller is not admin
+    ///
+    /// # Authorization
+    /// Caller must be the contract admin.
     pub fn set_platform_treasury(
         env: Env,
         caller: Address,
@@ -1554,10 +1616,25 @@ impl EscrowContract {
         Ok(())
     }
 
+    /// Returns the currently configured platform treasury address, if set.
     pub fn get_platform_treasury(env: Env) -> Option<Address> {
         env.storage().instance().get(&DataKey::PlatformTreasury)
     }
 
+    /// Sets the platform fee tier configuration for escrows.
+    ///
+    /// Defines how platform fees scale with escrow amount.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment
+    /// * `caller` - The address setting the tiers (must be admin)
+    /// * `tiers` - Vector of FeeTier objects defining fee schedules
+    ///
+    /// # Returns
+    /// Returns `Ok(())` on success, or an error if tiers are invalid
+    ///
+    /// # Authorization
+    /// Caller must be the contract admin.
     pub fn set_platform_fee_tiers(
         env: Env,
         caller: Address,
@@ -1573,6 +1650,7 @@ impl EscrowContract {
         Ok(())
     }
 
+    /// Returns the currently configured platform fee tiers, or defaults if not set.
     pub fn get_platform_fee_tiers(env: Env) -> Vec<FeeTier> {
         env.storage()
             .instance()
@@ -1583,6 +1661,29 @@ impl EscrowContract {
     // ── Escrow Lifecycle ──────────────────────────────────────────────────────
 
     /// Creates a new escrow and locks funds in the contract.
+    ///
+    /// Establishes a milestone-based escrow between a client and freelancer, with
+    /// optional arbiter and deadline enforcement. Client funds are locked in the
+    /// contract and released only after milestone approval.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment
+    /// * `client` - The address funding the escrow
+    /// * `freelancer` - The address receiving payment on milestone completion
+    /// * `token` - The Stellar token address to use for payment
+    /// * `total_amount` - The total amount (in token units) to lock
+    /// * `brief_hash` - A hash of the work description for reference
+    /// * `arbiter` - Optional address that can resolve disputes
+    /// * `deadline` - Optional Unix timestamp deadline for completion
+    /// * `lock_time` - Optional Unix timestamp when funds are locked until
+    /// * `_timelock` - Reserved for future timelock features
+    /// * `_multisig_config` - Reserved for future multisig features
+    ///
+    /// # Returns
+    /// Returns the new escrow's unique ID on success, or an error if:
+    /// - Total amount is 0 or negative
+    /// - Token transfer fails
+    /// - Client lacks sufficient balance
     ///
     /// # Gas notes
     /// - Auth check before any storage read.
@@ -1616,6 +1717,25 @@ impl EscrowContract {
         )
     }
 
+    /// Creates an escrow with a specific dispute resolution timeout window.
+    ///
+    /// Similar to `create_escrow` but with an explicit `dispute_timeout_ledger`
+    /// that sets how long disputes can remain unresolved before auto-resolution.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment
+    /// * `client` - The address funding the escrow
+    /// * `freelancer` - The address receiving payment
+    /// * `token` - The payment token
+    /// * `total_amount` - Total amount to lock
+    /// * `brief_hash` - Work description hash
+    /// * `arbiter` - Optional dispute arbiter
+    /// * `deadline` - Optional completion deadline
+    /// * `lock_time` - Optional lock start time
+    /// * `dispute_timeout_ledger` - Ledger sequence at which dispute auto-resolves
+    ///
+    /// # Returns
+    /// Returns the new escrow ID on success, or an error if parameters are invalid
     pub fn create_escrow_dispute_timeout(
         env: Env,
         client: Address,
