@@ -1,3 +1,10 @@
+/**
+ * Payment routes (server-side Express router — no rendered markup).
+ *
+ * See ./ISSUE3_ACCESSIBILITY.md for the accessibility audit performed
+ * against this file: it emits JSON only, so aria-label attributes apply to
+ * the frontend components that consume these endpoints, not to this file.
+ */
 import express from 'express';
 import paymentController from '../controllers/paymentController.js';
 import {
