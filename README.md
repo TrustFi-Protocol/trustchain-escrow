@@ -273,6 +273,11 @@ Docker Compose, and the ops scripts — is catalogued in
 [docs/configuration.md](docs/configuration.md), along with defaults, startup
 validation rules, and per-environment recommendations.
 
+Auth-related variables (`JWT_SECRET`, `NODE_ENV`) consumed by
+`backend/api/middleware/auth.js` are documented inline in
+`backend/.env.example` — copy that file before running the backend so
+Bearer-token verification doesn't fail on a missing secret.
+
 ---
 
 ## API Overview
