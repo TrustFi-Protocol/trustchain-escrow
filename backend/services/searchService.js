@@ -159,6 +159,9 @@ async function search(filters = {}) {
       fallbackData = archived.data.slice(skip, skip + limit);
       fallbackTotal = archived.total;
     }
+  }
+
+  if (fallbackTotal === 0) {
     recordQuery(analytics.zeroResultQueries, filters.q?.trim());
   }
 
