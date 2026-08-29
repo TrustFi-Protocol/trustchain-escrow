@@ -27,7 +27,20 @@ const getStatus = async (req, res) => {
       return res.status(400).json({ error: 'Invalid Stellar address' });
     }
     const record = await kycService.getStatus(address);
-    if (!record) return res.json({ address, status: 'Pending' });
+    if (!record) {
+      // Return the same field shape as a real record (with placeholder
+      // values) so a polling/loading frontend can render a stable skeleton
+      // without the layout shifting once the real record arrives.
+      return res.json({
+        address,
+        status: 'Pending',
+        applicantId: null,
+        reviewResult: null,
+        rejectLabels: [],
+        createdAt: null,
+        updatedAt: null,
+      });
+    }
     res.json(record);
   } catch (err) {
     logControllerError('kyc.getStatus', err, req);
