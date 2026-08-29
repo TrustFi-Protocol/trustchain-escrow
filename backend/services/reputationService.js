@@ -7,6 +7,13 @@ const BADGE_THRESHOLDS = {
 
 import prisma from '../lib/prisma.js';
 
+/**
+ * Normalize a caught error (or non-Error throwable) into a readable message.
+ *
+ * @param {unknown} error - The caught error or thrown value
+ * @param {string} fallback - Message to use when none can be extracted
+ * @returns {string} A non-empty error message
+ */
 function toErrorMessage(error, fallback) {
   if (error instanceof Error && error.message) {
     const message = error.message.trim();
@@ -20,6 +27,13 @@ function toErrorMessage(error, fallback) {
 
 // ── Read Operations ──────────────────────────────────────────────────────────
 
+/**
+ * Fetch the reputation record for a single Stellar address.
+ *
+ * @param {string} address - Stellar address to look up
+ * @returns {Promise<object|null>} The reputation record, or null if none exists
+ * @throws {Error} If the database lookup fails
+ */
 const getReputationByAddress = async (address) => {
   try {
     const record = await prisma.reputationRecord.findUnique({
@@ -31,6 +45,12 @@ const getReputationByAddress = async (address) => {
   }
 };
 
+/**
+ * Map a numeric reputation score to its badge tier.
+ *
+ * @param {number} score - Total reputation score
+ * @returns {'NEW'|'TRUSTED'|'VERIFIED'|'EXPERT'|'ELITE'} Badge tier for the given score
+ */
 const getBadge = (score) => {
   const s = Number(score);
   if (s >= BADGE_THRESHOLDS.ELITE) return 'ELITE';
@@ -40,11 +60,26 @@ const getBadge = (score) => {
   return 'NEW';
 };
 
+/**
+ * Compute the percentage of engagements completed successfully.
+ *
+ * @param {number} completed - Number of completed escrows
+ * @param {number} disputed - Number of disputed escrows
+ * @returns {number} Completion rate as a percentage (0-100), or 0 if there is no history
+ */
 const computeCompletionRate = (completed, disputed) => {
   const total = Number(completed) + Number(disputed);
   return total === 0 ? 0 : (Number(completed) / total) * 100;
 };
 
+/**
+ * Fetch a paginated leaderboard of reputation records, ranked by total score.
+ *
+ * @param {number} [limit=20] - Number of records to return per page
+ * @param {number} [page=1] - 1-indexed page number
+ * @returns {Promise<Array<object>>} Reputation records ordered by totalScore descending
+ * @throws {Error} If the database query fails
+ */
 const getLeaderboard = async (limit = 20, page = 1) => {
   try {
     const skip = (page - 1) * limit;
@@ -58,6 +93,13 @@ const getLeaderboard = async (limit = 20, page = 1) => {
   }
 };
 
+/**
+ * Compute an address's percentile rank among all reputation records.
+ *
+ * @param {string} address - Stellar address to rank
+ * @returns {Promise<number>} Percentile rank (0-100), or 0 if the address has no record
+ * @throws {Error} If the database query fails
+ */
 const getPercentileRank = async (address) => {
   try {
     const result = await prisma.$queryRaw`
@@ -85,6 +127,7 @@ const getPercentileRank = async (address) => {
  * @param {'client'|'freelancer'} role - Address role in escrow
  * @param {BigInt} escrowId - Escrow ID for idempotency
  * @param {string} tenantId - Tenant context
+ * @returns {Promise<void>} Resolves once the event and score update are persisted
  */
 const recordEscrowCompletion = async (address, role, escrowId, tenantId) => {
   // Score delta: +10 for freelancer, +5 for client
@@ -127,6 +170,7 @@ const recordEscrowCompletion = async (address, role, escrowId, tenantId) => {
  * @param {boolean} won - True if dispute won, false if lost
  * @param {BigInt} escrowId - Escrow ID for idempotency
  * @param {string} tenantId - Tenant context
+ * @returns {Promise<void>} Resolves once the event and score update are persisted
  */
 const recordDisputeOutcome = async (address, won, escrowId, tenantId) => {
   const scoreDelta = won ? 15 : -5;
@@ -185,6 +229,7 @@ const recordDisputeOutcome = async (address, won, escrowId, tenantId) => {
  * @param {boolean} wasAtFault - True if address was at fault for cancellation
  * @param {BigInt} escrowId - Escrow ID for idempotency
  * @param {string} tenantId - Tenant context
+ * @returns {Promise<void>} Resolves immediately if not at fault, otherwise once the penalty is persisted
  */
 const recordEscrowCancellation = async (address, wasAtFault, escrowId, tenantId) => {
   if (!wasAtFault) return;
@@ -231,7 +276,8 @@ const recordEscrowCancellation = async (address, wasAtFault, escrowId, tenantId)
  * Recalculate all reputation scores from event history.
  * Used for corrections after bugs or audits.
  *
- * @param {string} tenantId - Tenant context (optional, all if not specified)
+ * @param {string} [tenantId] - Tenant context (optional, all tenants if not specified)
+ * @returns {Promise<void>} Resolves once every affected reputation record has been updated
  */
 const recalculateFromEventHistory = async (tenantId) => {
   const where = tenantId ? { tenantId } : {};
