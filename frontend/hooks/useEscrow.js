@@ -1,5 +1,11 @@
 'use client';
 
+/**
+ * Data-fetching hooks only — no JSX/DOM elements or click handlers live
+ * here. See ./ISSUE4_ACCESSIBILITY.md for the keyboard-accessibility audit;
+ * key handlers and focus styles belong on the components that render
+ * escrow data from these hooks, not on the hooks themselves.
+ */
 import useSWR from 'swr';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
