@@ -260,6 +260,26 @@ describe('escrowController', () => {
 
       expect(res.status).toHaveBeenCalledWith(422);
     });
+
+    // Regression test: escrowId used to be serialized with a truthy check
+    // (`escrowId ? String(escrowId) : null`), which incorrectly treated a
+    // legitimate on-chain escrow id of 0n as "missing" because 0n is falsy.
+    it('returns escrowId "0" (not null) when the on-chain id is 0n', async () => {
+      const { scValToNative } = await import('@stellar/stellar-sdk');
+      scValToNative.mockReturnValueOnce(0n);
+      submitTransactionMock.mockResolvedValue({
+        hash: 'tx_zero',
+        status: 'SUCCESS',
+        returnValue: 'AAAA',
+      });
+      const req = { body: { signedXdr: 'AAAA...' } };
+      const res = createMockRes();
+
+      await escrowController.broadcastCreateEscrow(req, res);
+
+      expect(res.statusCode).toBe(200);
+      expect(res.body.escrowId).toBe('0');
+    });
   });
 
   describe('getMilestones', () => {

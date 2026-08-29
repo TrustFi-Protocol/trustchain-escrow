@@ -216,7 +216,7 @@ const broadcastCreateEscrow = async (req, res) => {
 
     // Upsert the escrow row so the DB reflects the on-chain state immediately,
     // even before the indexer's next polling tick.
-    if (escrowId !== null) {
+    if (escrowId != null) {
       await prisma.escrow.upsert({
         where: { id: escrowId },
         create: {
@@ -235,7 +235,11 @@ const broadcastCreateEscrow = async (req, res) => {
       });
     }
 
-    return res.status(200).json({ hash: result.hash, escrowId: escrowId ? String(escrowId) : null });
+    // Use a null-check (not truthy check) so a legitimate escrowId of 0n
+    // is not mistaken for "no id" — 0n is falsy but a valid on-chain id.
+    return res
+      .status(200)
+      .json({ hash: result.hash, escrowId: escrowId != null ? String(escrowId) : null });
   } catch (err) {
     logControllerError('escrow.broadcastCreateEscrow', err, req);
     res.status(500).json({ error: err.message });
@@ -315,7 +319,7 @@ async function getCachedStats(cacheKey, dbQuery) {
   try {
     // Try to get from cache
     const cached = await cache.get(cacheKey);
-    if (cached !== null && cached !== undefined) {
+    if (cached != null) {
       console.log(`[Cache] Stats hit: ${cacheKey}`);
       return JSON.parse(cached);
     }
