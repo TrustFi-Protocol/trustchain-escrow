@@ -61,7 +61,12 @@ function deriveAdminId(key) {
   return `apikey:${crypto.createHash('sha256').update(String(key)).digest('hex').slice(0, 16)}`;
 }
 
-/** Mints a short-lived admin session token bound to `adminId`. */
+/**
+ * Mints a short-lived admin session token bound to `adminId`.
+ *
+ * @param {string} adminId — stable admin identity to embed in the token claim
+ * @returns {string} signed JWT with a 15-minute expiry
+ */
 export function issueAdminToken(adminId) {
   return jwt.sign({ type: 'admin', adminId }, ADMIN_JWT_SECRET, {
     algorithm: JWT_ALGORITHM,
@@ -69,7 +74,12 @@ export function issueAdminToken(adminId) {
   });
 }
 
-/** Verifies an admin session token, returning its payload. Throws on failure. */
+/**
+ * Verifies an admin session token, returning its payload. Throws on failure.
+ *
+ * @param {string} token — signed JWT issued by {@link issueAdminToken}
+ * @returns {{ type: string, adminId: string }} decoded token payload
+ */
 export function verifyAdminToken(token) {
   const payload = jwt.verify(token, ADMIN_JWT_SECRET, { algorithms: [JWT_ALGORITHM] });
   if (payload.type !== 'admin') throw new Error('Not an admin token');
@@ -82,6 +92,7 @@ export function verifyAdminToken(token) {
  * @param {import('express').Request}  req
  * @param {import('express').Response} res
  * @param {import('express').NextFunction} next
+ * @returns {Promise<void>}
  */
 const adminAuth = async (req, res, next) => {
   // ── Preferred path: short-lived admin session token ─────────────────────────
@@ -143,6 +154,15 @@ const adminAuth = async (req, res, next) => {
   next();
 };
 
+/**
+ * Express middleware that marks the request as admin when a valid API key is
+ * present, but allows the request through either way.
+ *
+ * @param {import('express').Request}  req
+ * @param {import('express').Response} _res
+ * @param {import('express').NextFunction} next
+ * @returns {void}
+ */
 export function optionalAdminAuth(req, _res, next) {
   const adminKey = process.env.ADMIN_API_KEY;
   const providedKey = req.headers['x-admin-api-key'];
@@ -155,4 +175,13 @@ export function optionalAdminAuth(req, _res, next) {
   next();
 }
 
+/**
+ * Express middleware restricting access to admin-only routes. Default export
+ * alias of {@link adminAuth}.
+ *
+ * @param {import('express').Request}  req
+ * @param {import('express').Response} res
+ * @param {import('express').NextFunction} next
+ * @returns {Promise<void>}
+ */
 export default adminAuth;
