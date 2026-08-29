@@ -76,6 +76,13 @@ const parseAddress = (v) => {
 
 // ── Event handlers ────────────────────────────────────────────────────────────
 
+/**
+ * Handles a `mil_apr` (milestone approved) contract event by marking the
+ * corresponding milestone as Approved.
+ *
+ * @param {object} event - Raw Soroban contract event (topic/value/ledger shape from eventIndexer).
+ * @returns {Promise<void>}
+ */
 export async function handleMilestoneApproved(event) {
   const [milestoneId] = event.value ?? [];
   if (event.topic?.[1] == null || milestoneId == null) return;
@@ -86,6 +93,13 @@ export async function handleMilestoneApproved(event) {
   });
 }
 
+/**
+ * Handles a `dis_rai` (dispute raised) contract event: flags the escrow as
+ * Disputed and upserts a Dispute record.
+ *
+ * @param {object} event - Raw Soroban contract event.
+ * @returns {Promise<void>}
+ */
 export async function handleDisputeRaised(event) {
   if (event.topic?.[1] == null) return;
   const escrowId = parseBigInt(event.topic[1]);
@@ -104,6 +118,13 @@ export async function handleDisputeRaised(event) {
   ]);
 }
 
+/**
+ * Handles a `funds_rel` (funds released) contract event: records reputation
+ * completion for both parties and decrements the escrow's remaining balance.
+ *
+ * @param {object} event - Raw Soroban contract event.
+ * @returns {Promise<void>}
+ */
 export async function handleFundsReleased(event) {
   const [, amount] = event.value ?? [];
   if (event.topic?.[1] == null || amount == null) return;
@@ -140,12 +161,26 @@ export async function handleFundsReleased(event) {
   `;
 }
 
+/**
+ * Handles an `esc_can` (escrow cancelled) contract event by marking the
+ * escrow as Cancelled.
+ *
+ * @param {object} event - Raw Soroban contract event.
+ * @returns {Promise<void>}
+ */
 export async function handleEscrowCancelled(event) {
   if (event.topic?.[1] == null) return;
   const escrowId = parseBigInt(event.topic[1]);
   await prisma.escrow.updateMany({ where: { id: escrowId }, data: { status: 'Cancelled' } });
 }
 
+/**
+ * Handles an `esc_crt` (escrow created) contract event by upserting a new
+ * Escrow record with an Active status.
+ *
+ * @param {object} event - Raw Soroban contract event.
+ * @returns {Promise<void>}
+ */
 export async function handleEscrowCreated(event) {
   const [client, freelancer, amount] = event.value ?? [];
   if (event.topic?.[1] == null || client == null) return;
@@ -168,6 +203,13 @@ export async function handleEscrowCreated(event) {
   });
 }
 
+/**
+ * Handles a `mil_add` (milestone added) contract event by upserting a new
+ * Milestone record in Pending status.
+ *
+ * @param {object} event - Raw Soroban contract event.
+ * @returns {Promise<void>}
+ */
 export async function handleMilestoneAdded(event) {
   const [milestoneId, amount] = event.value ?? [];
   if (event.topic?.[1] == null || milestoneId == null) return;
@@ -187,6 +229,13 @@ export async function handleMilestoneAdded(event) {
   });
 }
 
+/**
+ * Handles a `mil_sub` (milestone submitted) contract event by marking the
+ * corresponding milestone as Submitted.
+ *
+ * @param {object} event - Raw Soroban contract event.
+ * @returns {Promise<void>}
+ */
 export async function handleMilestoneSubmitted(event) {
   const [milestoneId] = event.value ?? [];
   if (event.topic?.[1] == null || milestoneId == null) return;
@@ -197,6 +246,13 @@ export async function handleMilestoneSubmitted(event) {
   });
 }
 
+/**
+ * Handles a `dis_res` (dispute resolved) contract event: records the win/loss
+ * reputation outcome for both parties and marks the escrow as Completed.
+ *
+ * @param {object} event - Raw Soroban contract event.
+ * @returns {Promise<void>}
+ */
 export async function handleDisputeResolved(event) {
   if (event.topic?.[1] == null) return;
   const escrowId = parseBigInt(event.topic[1]);
@@ -232,6 +288,13 @@ export async function handleDisputeResolved(event) {
   await prisma.escrow.updateMany({ where: { id: escrowId }, data: { status: 'Completed' } });
 }
 
+/**
+ * Handles a `rep_upd` (reputation updated) contract event by upserting the
+ * address's total reputation score.
+ *
+ * @param {object} event - Raw Soroban contract event.
+ * @returns {Promise<void>}
+ */
 export async function handleReputationUpdated(event) {
   const [address, newScore] = event.value ?? [];
   if (address == null) return;
@@ -260,6 +323,13 @@ const HANDLERS = {
   rep_upd: handleReputationUpdated,
 };
 
+/**
+ * Routes a raw contract event to its registered handler based on the
+ * event's topic (`event.topic[0]`). Unknown topics are logged and skipped.
+ *
+ * @param {object} event - Raw Soroban contract event.
+ * @returns {Promise<void>}
+ */
 export async function dispatchEvent(event) {
   const topic =
     typeof event.topic?.[0] === 'string' ? event.topic[0] : String(event.topic?.[0] ?? '');
@@ -333,6 +403,9 @@ export async function fetchAndProcessEvents(fromLedger) {
 /**
  * Starts the indexer polling loop.
  * Validates required env vars, loads cursor from DB, then polls.
+ *
+ * @returns {Promise<void>} never resolves under normal operation; the poll
+ *          loop runs indefinitely via `setInterval`.
  */
 export async function startIndexer() {
   // Load cursor
