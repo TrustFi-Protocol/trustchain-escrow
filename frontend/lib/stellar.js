@@ -52,6 +52,41 @@ const _NETWORK_PASSPHRASE =
  * 5. Call server.prepareTransaction(tx) to simulate + get footprint
  * 6. Return tx.toXDR('base64')
  */
+/**
+ * Issue #99: builds, simulates, and assembles a single-operation Soroban
+ * transaction — the sequence every `build*Tx` function below repeated
+ * near-verbatim (fetch account, create the TransactionBuilder, add the
+ * operation, simulate, assemble, return XDR). Extracted into one shared
+ * helper so that sequence only exists in one place.
+ *
+ * @param {string} sourceAddress
+ * @param {(contract: Contract) => xdr.Operation} buildOperation — returns
+ *   the single contract-call operation to add to the transaction.
+ * @returns {Promise<string>} unsigned transaction XDR (base64)
+ */
+async function _buildAndSimulateTx(sourceAddress, buildOperation) {
+  const server = new SorobanRpc.Server(_SOROBAN_RPC_URL);
+  const account = await server.getAccount(sourceAddress);
+  const contract = new Contract(_CONTRACT_ADDRESS);
+
+  const txBuilder = new TransactionBuilder(account, {
+    fee: BASE_FEE,
+    networkPassphrase: _NETWORK_PASSPHRASE,
+  });
+
+  txBuilder.addOperation(buildOperation(contract));
+  txBuilder.setTimeout(300);
+  const tx = txBuilder.build();
+
+  const prepared = await server.simulateTransaction(tx);
+  if (SorobanRpc.isSimulationError(prepared)) {
+    throw new Error(`Simulation failed: ${prepared.error}`);
+  }
+
+  const assembled = SorobanRpc.assembleTransaction(tx, prepared).build();
+  return assembled.toXDR('base64');
+}
+
 export async function buildCreateEscrowTx({
   sourceAddress,
   freelancerAddress,
@@ -73,17 +108,7 @@ export async function buildCreateEscrowTx({
     briefHash,
   });
 
-  const server = new SorobanRpc.Server(_SOROBAN_RPC_URL);
-  const account = await server.getAccount(sourceAddress);
-
-  const contract = new Contract(_CONTRACT_ADDRESS);
-
-  const txBuilder = new TransactionBuilder(account, {
-    fee: BASE_FEE,
-    networkPassphrase: _NETWORK_PASSPHRASE,
-  });
-
-  txBuilder.addOperation(
+  return _buildAndSimulateTx(sourceAddress, (contract) =>
     contract.call(
       'create_escrow',
       new Address(sourceAddress).toScVal(),
@@ -95,17 +120,6 @@ export async function buildCreateEscrowTx({
       deadline ? nativeToScVal(BigInt(deadline), { type: 'u64' }) : xdr.ScVal.scvTypeOption(),
     ),
   );
-
-  txBuilder.setTimeout(300);
-  const tx = txBuilder.build();
-
-  const prepared = await server.simulateTransaction(tx);
-  if (SorobanRpc.isSimulationError(prepared)) {
-    throw new Error(`Simulation failed: ${prepared.error}`);
-  }
-
-  const assembled = SorobanRpc.assembleTransaction(tx, prepared).build();
-  return assembled.toXDR('base64');
 }
 
 /**
@@ -130,17 +144,7 @@ export async function buildAddMilestoneTx({
 }) {
   _validateInputs({ sourceAddress, escrowId, title, descriptionHash, amount });
 
-  const server = new SorobanRpc.Server(_SOROBAN_RPC_URL);
-  const account = await server.getAccount(sourceAddress);
-
-  const contract = new Contract(_CONTRACT_ADDRESS);
-
-  const txBuilder = new TransactionBuilder(account, {
-    fee: BASE_FEE,
-    networkPassphrase: _NETWORK_PASSPHRASE,
-  });
-
-  txBuilder.addOperation(
+  return _buildAndSimulateTx(sourceAddress, (contract) =>
     contract.call(
       'add_milestone',
       new Address(sourceAddress).toScVal(),
@@ -150,17 +154,6 @@ export async function buildAddMilestoneTx({
       nativeToScVal(BigInt(amount), { type: 'i128' }),
     ),
   );
-
-  txBuilder.setTimeout(300);
-  const tx = txBuilder.build();
-
-  const prepared = await server.simulateTransaction(tx);
-  if (SorobanRpc.isSimulationError(prepared)) {
-    throw new Error(`Simulation failed: ${prepared.error}`);
-  }
-
-  const assembled = SorobanRpc.assembleTransaction(tx, prepared).build();
-  return assembled.toXDR('base64');
 }
 
 /**
@@ -181,17 +174,7 @@ export async function buildApproveMilestoneTx({
 }) {
   _validateInputs({ sourceAddress, escrowId, milestoneId });
 
-  const server = new SorobanRpc.Server(_SOROBAN_RPC_URL);
-  const account = await server.getAccount(sourceAddress);
-
-  const contract = new Contract(_CONTRACT_ADDRESS);
-
-  const txBuilder = new TransactionBuilder(account, {
-    fee: BASE_FEE,
-    networkPassphrase: _NETWORK_PASSPHRASE,
-  });
-
-  txBuilder.addOperation(
+  return _buildAndSimulateTx(sourceAddress, (contract) =>
     contract.call(
       'approve_milestone',
       new Address(sourceAddress).toScVal(),
@@ -199,17 +182,6 @@ export async function buildApproveMilestoneTx({
       nativeToScVal(BigInt(milestoneId), { type: 'u32' }),
     ),
   );
-
-  txBuilder.setTimeout(300);
-  const tx = txBuilder.build();
-
-  const prepared = await server.simulateTransaction(tx);
-  if (SorobanRpc.isSimulationError(prepared)) {
-    throw new Error(`Simulation failed: ${prepared.error}`);
-  }
-
-  const assembled = SorobanRpc.assembleTransaction(tx, prepared).build();
-  return assembled.toXDR('base64');
 }
 
 /**
@@ -230,17 +202,7 @@ export async function buildSubmitMilestoneTx({
 }) {
   _validateInputs({ sourceAddress, escrowId, milestoneId });
 
-  const server = new SorobanRpc.Server(_SOROBAN_RPC_URL);
-  const account = await server.getAccount(sourceAddress);
-
-  const contract = new Contract(_CONTRACT_ADDRESS);
-
-  const txBuilder = new TransactionBuilder(account, {
-    fee: BASE_FEE,
-    networkPassphrase: _NETWORK_PASSPHRASE,
-  });
-
-  txBuilder.addOperation(
+  return _buildAndSimulateTx(sourceAddress, (contract) =>
     contract.call(
       'submit_milestone',
       new Address(sourceAddress).toScVal(),
@@ -248,17 +210,6 @@ export async function buildSubmitMilestoneTx({
       nativeToScVal(BigInt(milestoneId), { type: 'u32' }),
     ),
   );
-
-  txBuilder.setTimeout(300);
-  const tx = txBuilder.build();
-
-  const prepared = await server.simulateTransaction(tx);
-  if (SorobanRpc.isSimulationError(prepared)) {
-    throw new Error(`Simulation failed: ${prepared.error}`);
-  }
-
-  const assembled = SorobanRpc.assembleTransaction(tx, prepared).build();
-  return assembled.toXDR('base64');
 }
 
 /**
@@ -269,17 +220,7 @@ export async function buildSubmitMilestoneTx({
 export async function buildRaiseDisputeTx({ sourceAddress, escrowId, milestoneId = null }) {
   _validateInputs({ sourceAddress, escrowId });
 
-  const server = new SorobanRpc.Server(_SOROBAN_RPC_URL);
-  const account = await server.getAccount(sourceAddress);
-
-  const contract = new Contract(_CONTRACT_ADDRESS);
-
-  const txBuilder = new TransactionBuilder(account, {
-    fee: BASE_FEE,
-    networkPassphrase: _NETWORK_PASSPHRASE,
-  });
-
-  txBuilder.addOperation(
+  return _buildAndSimulateTx(sourceAddress, (contract) =>
     contract.call(
       'raise_dispute',
       new Address(sourceAddress).toScVal(),
@@ -289,17 +230,6 @@ export async function buildRaiseDisputeTx({ sourceAddress, escrowId, milestoneId
         : xdr.ScVal.scvTypeOption(),
     ),
   );
-
-  txBuilder.setTimeout(300);
-  const tx = txBuilder.build();
-
-  const prepared = await server.simulateTransaction(tx);
-  if (SorobanRpc.isSimulationError(prepared)) {
-    throw new Error(`Simulation failed: ${prepared.error}`);
-  }
-
-  const assembled = SorobanRpc.assembleTransaction(tx, prepared).build();
-  return assembled.toXDR('base64');
 }
 
 /**

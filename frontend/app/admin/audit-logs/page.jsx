@@ -9,14 +9,11 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useAdminStore } from '../../../store/app-store';
 import { adminFetch } from '../../../store/admin';
-
-function actionColor(action) {
-  if (action?.includes('BAN')) return 'text-red-400 bg-red-500/10 border-red-500/20';
-  if (action?.includes('SUSPEND')) return 'text-amber-400 bg-amber-500/10 border-amber-500/20';
-  if (action?.includes('RESOLVE'))
-    return 'text-emerald-400 bg-emerald-500/10 border-emerald-500/20';
-  return 'text-indigo-400 bg-indigo-500/10 border-indigo-500/20';
-}
+import {
+  actionColor,
+  formatAuditLogTarget,
+  formatAuditLogTimestamp,
+} from '../../../lib/auditLogFormat';
 
 export default function AdminAuditLogsPage() {
   const { apiKey } = useAdminStore();
@@ -109,15 +106,13 @@ export default function AdminAuditLogsPage() {
                     className="px-5 py-3 hidden sm:table-cell font-mono text-gray-400 text-xs"
                     title={log.targetAddress}
                   >
-                    {log.targetAddress?.length > 20
-                      ? `${log.targetAddress.slice(0, 10)}…`
-                      : log.targetAddress}
+                    {formatAuditLogTarget(log.targetAddress)}
                   </td>
                   <td className="px-5 py-3 hidden md:table-cell text-gray-500 max-w-xs truncate">
                     {log.reason || '—'}
                   </td>
                   <td className="px-5 py-3 text-right text-gray-500 text-xs whitespace-nowrap">
-                    {new Date(log.performedAt).toLocaleString()}
+                    {formatAuditLogTimestamp(log.performedAt)}
                   </td>
                 </tr>
               ))
