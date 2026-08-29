@@ -236,8 +236,13 @@ async function loadSecrets() {
   cacheSet(secrets);
 
   // Merge into process.env so all existing code continues to work
+  // Issue #108: standardized on `== null` (catches both null and
+  // undefined in one check) across this file, instead of mixing
+  // `!== undefined && !== null` here with a plain `=== undefined`
+  // check elsewhere (see getSecrets below, where that mismatch let a
+  // secret whose value was `null` slip past as "present").
   for (const [k, v] of Object.entries(secrets)) {
-    if (v !== undefined && v !== null) {
+    if (v != null) {
       process.env[k] = String(v);
     }
   }
@@ -256,7 +261,7 @@ async function loadSecrets() {
 export async function getSecret(name, fallback) {
   const secrets = await loadSecrets();
   const value = secrets[name] ?? fallback;
-  if (value === undefined) {
+  if (value == null) {
     audit('error', `Secret not found: ${name}`);
     throw new Error(`Secret "${name}" is not defined`);
   }
@@ -274,7 +279,7 @@ export async function getSecrets(names) {
   const secrets = await loadSecrets();
   const result = {};
   for (const name of names) {
-    if (secrets[name] === undefined) {
+    if (secrets[name] == null) {
       audit('error', `Secret not found: ${name}`);
       throw new Error(`Secret "${name}" is not defined`);
     }

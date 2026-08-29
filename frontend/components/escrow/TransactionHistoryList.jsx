@@ -115,9 +115,19 @@ function HistoryRow({ event, network }) {
 }
 
 /**
- * @param {{ history: Array<{ id: string|number, type: string, description?: string,
- *   amount?: string, txHash?: string, timestamp?: string|number }>, network?: string,
- *   className?: string }} props
+ * Renders a chronological, accessible list of on-chain events for a single
+ * escrow (creation, funding, milestone actions, disputes, cancellation,
+ * release), most recent first, each linking out to the Stellar block
+ * explorer.
+ *
+ * @param {object} props
+ * @param {Array<{ id: string|number, type: string, description?: string,
+ *   amount?: string, txHash?: string, timestamp?: string|number }>} [props.history]
+ *   — event entries; unsorted input is accepted, sorted internally by timestamp descending.
+ * @param {string} [props.network] — 'mainnet' or 'testnet', used to build the correct
+ *   Stellar Expert explorer link for each event's `txHash`.
+ * @param {string} [props.className] — extra classes merged onto the root `<section>`.
+ * @returns {JSX.Element} The transaction history section (empty-state message when `history` is empty).
  */
 export default function TransactionHistoryList({ history = [], network, className = '' }) {
   const sorted = [...history].sort((a, b) => {
@@ -157,6 +167,16 @@ export default function TransactionHistoryList({ history = [], network, classNam
 /**
  * Derives a best-effort transaction history from an escrow + its milestones
  * when the API has not yet supplied a dedicated `transactionHistory` array.
+ * Prefers `escrow.transactionHistory` verbatim when present and non-empty;
+ * otherwise synthesizes `created`/`funded`/milestone events from whichever
+ * escrow fields are available.
+ *
+ * @param {object|null|undefined} escrow — escrow record; may be partially
+ *   populated (fields are checked individually, none are required).
+ * @returns {Array<{ id: string, type: string, description?: string,
+ *   amount?: string, txHash?: string, timestamp?: string|number }>}
+ *   Event entries suitable for passing as `TransactionHistoryList`'s
+ *   `history` prop. Returns `[]` when `escrow` is null/undefined.
  */
 export function buildHistoryFromEscrow(escrow) {
   if (!escrow) return [];

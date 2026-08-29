@@ -362,9 +362,19 @@ export default function ConsolePage() {
               )}
 
               {/* Execution Logs */}
-              {logs.length > 0 && (
-                <div className="card space-y-4">
-                  <h2 className="font-semibold text-white">Execution Logs</h2>
+              {/* Issue #107: this card used to be omitted entirely whenever
+                  `logs` was empty (before the first execution, or right
+                  after switching functions resets it), leaving no
+                  explanation of why nothing was shown. Always render the
+                  card once a function is selected, with a friendly
+                  placeholder in place of an empty log list. */}
+              <div className="card space-y-4">
+                <h2 className="font-semibold text-white">Execution Logs</h2>
+                {logs.length === 0 ? (
+                  <p className="text-sm text-gray-500 text-center py-6">
+                    No output yet — click Execute to invoke this function.
+                  </p>
+                ) : (
                   <div className="bg-gray-950 p-3 rounded-lg space-y-1 max-h-48 overflow-auto">
                     {logs.map((log, i) => {
                       let color = 'text-gray-400';
@@ -380,8 +390,8 @@ export default function ConsolePage() {
                       );
                     })}
                   </div>
-                </div>
-              )}
+                )}
+              </div>
             </>
           ) : (
             <div className="card text-center py-12 text-gray-400">
