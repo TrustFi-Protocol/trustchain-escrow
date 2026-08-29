@@ -100,6 +100,12 @@ describe('trackUsage / getUserUsage', () => {
     const { count } = getUserUsage('u1');
     expect(count).toBe(2);
   });
+
+  it('getUserUsage returns zero usage for a user id with no recorded requests', () => {
+    const { count, resetAt } = getUserUsage('never-seen-user');
+    expect(count).toBe(0);
+    expect(resetAt).toBeNull();
+  });
 });
 
 // ── Per-user rate limiter ─────────────────────────────────────────────────────
@@ -153,6 +159,14 @@ describe('per-user rate limiter', () => {
     expect(res.headers['retry-after']).toBeDefined();
     expect(Number(res.headers['retry-after'])).toBeGreaterThan(0);
   });
+
+  it('falls back to an IP-based key when no user id or x-user-id header is present', async () => {
+    const app = buildApp({ max: 1 });
+    // No req.user and no x-user-id header — must not throw, and must still enforce the limit.
+    await request(app).get('/test').expect(200);
+    const res = await request(app).get('/test');
+    expect(res.status).toBe(429);
+  });
 });
 
 // ── Sliding-window correctness ────────────────────────────────────────────────
@@ -202,6 +216,21 @@ describe('burst limiting', () => {
 
     await request(app).get('/').expect(200);
     await request(app).get('/').expect(200);
+    const res = await request(app).get('/').expect(429);
+    expect(res.body.reason).toBe('burst');
+  });
+
+  it('blocks immediately when burstMax is 0', async () => {
+    const app = express();
+    app.use(
+      createSlidingWindowRateLimiter({
+        max: 100,
+        burstMax: 0,
+        prefix: 'burst-zero-test',
+      }),
+    );
+    app.get('/', (_req, res) => res.json({ ok: true }));
+
     const res = await request(app).get('/').expect(429);
     expect(res.body.reason).toBe('burst');
   });

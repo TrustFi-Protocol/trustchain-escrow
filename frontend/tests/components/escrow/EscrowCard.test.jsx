@@ -159,4 +159,35 @@ describe('EscrowCard', () => {
     expect(bar).toHaveAttribute('aria-valuemin', '0');
     expect(bar).toHaveAttribute('aria-valuemax', '100');
   });
+
+  // ── Edge cases ─────────────────────────────────────────────────────────────
+
+  it('does not render a transaction section when transactionHash is absent', () => {
+    renderWithAppProviders(<EscrowCard escrow={baseEscrow} />);
+    expect(screen.queryByText('TX:')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /copy transaction hash/i })).not.toBeInTheDocument();
+  });
+
+  it('defaults to 0% progress when milestoneProgress is missing', () => {
+    const { milestoneProgress, ...withoutProgress } = baseEscrow;
+    const { container } = renderWithAppProviders(<EscrowCard escrow={withoutProgress} />);
+    const bar = screen.getByRole('progressbar');
+    expect(bar).toHaveAttribute('aria-valuenow', '0');
+    expect(container.querySelector('[style*="width"]')).toHaveStyle({ width: '0%' });
+  });
+
+  it('does not crash and shows no time-remaining row when the deadline is malformed', () => {
+    renderWithAppProviders(<EscrowCard escrow={{ ...baseEscrow, deadline: 'not-a-real-date' }} />);
+    expect(screen.queryByText(/left/i)).not.toBeInTheDocument();
+    expect(screen.queryByText('Deadline passed')).not.toBeInTheDocument();
+  });
+
+  it('renders 0% progress without throwing when milestoneProgress is malformed', () => {
+    const { container } = renderWithAppProviders(
+      <EscrowCard escrow={{ ...baseEscrow, milestoneProgress: 'not / valid' }} />,
+    );
+    const bar = screen.getByRole('progressbar');
+    expect(bar).toHaveAttribute('aria-valuenow', '0');
+    expect(container.querySelector('[style*="width"]')).toHaveStyle({ width: '0%' });
+  });
 });

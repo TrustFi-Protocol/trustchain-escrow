@@ -39,7 +39,12 @@ router.get(
  * @query  page        default 1
  * @query  limit       default 20, max 100
  */
-router.get('/search', validatePagination, escrowController.searchEscrowsV1);
+router.get(
+  '/search',
+  validatePagination,
+  cacheResponse({ ttl: TTL.LIST, tags: ['escrows'] }),
+  escrowController.searchEscrowsV1,
+);
 
 /**
  * @route  POST /api/escrows/broadcast

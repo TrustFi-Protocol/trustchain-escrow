@@ -7,6 +7,7 @@ import {
 } from '../../middleware/validation.js';
 import authMiddleware from '../middleware/auth.js';
 import { authorizeBodyAddress, authorizeParamAddress } from '../middleware/authorization.js';
+import { cacheResponse, TTL } from '../middleware/cache.js';
 
 const router = express.Router();
 
@@ -51,6 +52,7 @@ router.get(
   stellarAddressParam('address'),
   handleValidationErrors,
   authorizeParamAddress('address'),
+  cacheResponse({ ttl: TTL.LIST, tags: (req) => [`payments:${req.params.address}`] }),
   paymentController.listByAddress,
 );
 

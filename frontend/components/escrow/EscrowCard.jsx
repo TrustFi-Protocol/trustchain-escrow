@@ -58,25 +58,16 @@ export default function EscrowCard({ escrow, isLoading = false }) {
   const isDisputed = status === 'Disputed';
   const remaining = getTimeRemaining(deadline);
 
-  const handleKeyDown = (event) => {
-    // Activate on Enter or Space key
-    if (event.key === 'Enter' || event.key === ' ') {
-      event.preventDefault();
-      cardRef.current?.click();
-    }
-  };
-
-  const stopLinkNavigation = (event) => event.preventDefault();
-
+  /*
+    The whole card is clickable, but the card itself is not the control: the
+    heading holds a real <Link> whose ::after is stretched over the card. That
+    keeps native link semantics and a single tab stop while letting the copy
+    controls inside the card stay independently reachable — a link with
+    role="button" wrapping other controls violated WCAG 4.1.2.
+  */
   return (
-    <Link
-      href={`/escrow/${id}`}
-      ref={cardRef}
-      tabIndex={0}
-      onKeyDown={handleKeyDown}
-      className="card block hover:border-gray-300 dark:hover:border-gray-700 hover:-translate-y-0.5 hover:shadow-lg dark:hover:shadow-black/30 transition-all duration-200 group focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-gray-950"
-      role="button"
-      aria-label={`View details for escrow: ${title}`}
+    <article
+      className="card relative block hover:border-gray-300 dark:hover:border-gray-700 hover:-translate-y-0.5 hover:shadow-lg dark:hover:shadow-black/30 transition-all duration-200 group focus-within:ring-2 focus-within:ring-indigo-500 focus-within:ring-offset-2 dark:focus-within:ring-offset-gray-950"
     >
       {/* Disputed warning banner */}
       {isDisputed && (
@@ -95,9 +86,15 @@ export default function EscrowCard({ escrow, isLoading = false }) {
       <div className="flex items-start justify-between gap-3 mb-3">
         <div className="flex-1 min-w-0">
           <h3 className="text-gray-900 dark:text-white font-semibold truncate group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition-colors">
-            {title}
+            <Link
+              href={`/escrow/${id}`}
+              aria-label={`View details for escrow: ${title}`}
+              className="after:absolute after:inset-0 after:content-[''] focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-gray-950 rounded"
+            >
+              {title}
+            </Link>
           </h3>
-          <p className="text-xs text-gray-500 mt-0.5">
+          <p className="relative z-10 w-fit text-xs text-gray-500 mt-0.5">
             {role === 'client' ? t('escrow.fields.freelancer') : t('escrow.fields.client')}
             {': '}
             <span className="font-mono">{counterparty}</span>
@@ -146,20 +143,18 @@ export default function EscrowCard({ escrow, isLoading = false }) {
             <span className="text-xs font-mono text-gray-500 dark:text-gray-400 truncate">
               {transactionHash.slice(0, 16)}...
             </span>
-            <div onClick={stopLinkNavigation}>
-              <CopyButton text={transactionHash} label="Copy" size="sm" />
-            </div>
+            <span className="relative z-10">
+              <CopyButton text={transactionHash} label="transaction hash" size="sm" />
+            </span>
           </div>
         </div>
       )}
 
       {/* Footer */}
       <div className="flex items-center justify-between mt-3 pt-3 border-t border-gray-200 dark:border-gray-800">
-        <span className="flex items-center gap-1 text-xs text-gray-500 dark:text-gray-600">
+        <span className="relative z-10 flex items-center gap-1 text-xs text-gray-500 dark:text-gray-600">
           #{id}
-          <span onClick={stopLinkNavigation}>
-            <CopyButton text={String(id)} label="escrow ID" size="sm" />
-          </span>
+          <CopyButton text={String(id)} label="escrow ID" size="sm" />
         </span>
         <span
           className={`text-xs font-medium ${
