@@ -65,7 +65,12 @@ async function getOrCreateApplicant(address) {
   return record;
 }
 
-/** Generate a short-lived SDK access token for the frontend widget. */
+/**
+ * Generate a short-lived SDK access token for the frontend widget.
+ *
+ * @param {string} address — Stellar public key of the applicant
+ * @returns {Promise<{ token: string, applicantId: string }>}
+ */
 async function generateSdkToken(address) {
   const record = await getOrCreateApplicant(address);
   const data = await sumsubFetch(
@@ -75,12 +80,25 @@ async function generateSdkToken(address) {
   return { token: data.token, applicantId: record.applicantId };
 }
 
-/** Get current KYC status for an address (from DB, not Sumsub). */
+/**
+ * Get current KYC status for an address (from DB, not Sumsub).
+ *
+ * @param {string} address — Stellar public key
+ * @returns {Promise<object|null>} the KYC verification record, or null if none exists
+ */
 async function getStatus(address) {
   return prisma.kycVerification.findUnique({ where: { address } });
 }
 
-/** Get all KYC records for admin review (paginated). */
+/**
+ * Get all KYC records for admin review (paginated).
+ *
+ * @param {object} [options]
+ * @param {number} [options.skip=0] — number of records to skip
+ * @param {number} [options.take=20] — max number of records to return
+ * @param {string} [options.status] — filter by KYC status
+ * @returns {Promise<{ data: object[], total: number }>}
+ */
 async function listAll({ skip = 0, take = 20, status } = {}) {
   const where = status ? { status } : {};
   const [data, total] = await prisma.$transaction([
@@ -92,7 +110,13 @@ async function listAll({ skip = 0, take = 20, status } = {}) {
 
 /**
  * Process a Sumsub webhook event and update DB status.
- * Returns the updated record.
+ *
+ * @param {object} payload — Sumsub webhook payload
+ * @param {string} payload.externalUserId — Stellar address of the applicant
+ * @param {string} payload.applicantId — Sumsub applicant ID
+ * @param {string} payload.type — webhook event type
+ * @param {object} [payload.reviewResult] — review outcome, present on `applicantReviewed`
+ * @returns {Promise<object|null>} the updated record, or null for unhandled event types
  */
 async function handleWebhook(payload) {
   const { externalUserId, applicantId, type, reviewResult } = payload;
@@ -142,7 +166,10 @@ async function handleWebhook(payload) {
 
 /**
  * Verify Sumsub webhook HMAC signature.
- * Returns true if valid.
+ *
+ * @param {string} rawBody — raw request body used to compute the signature
+ * @param {string} signature — signature received in the webhook headers
+ * @returns {boolean} true if the signature is valid
  */
 function verifyWebhookSignature(rawBody, signature) {
   const expected = crypto.createHmac('sha256', SUMSUB_SECRET_KEY).update(rawBody).digest('hex');

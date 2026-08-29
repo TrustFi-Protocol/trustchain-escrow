@@ -47,4 +47,24 @@ describe('useReputation', () => {
     const { result } = renderHook(() => useReputation('GABC123'));
     expect(result.current.isLoading).toBe(false);
   });
+
+  it('returns default values when address is an empty string', () => {
+    const { result } = renderHook(() => useReputation(''));
+    expect(result.current.reputation).toBeNull();
+    expect(result.current.badge).toBe('NEW');
+    expect(result.current.error).toBeNull();
+  });
+
+  it('returns default values when address is undefined', () => {
+    const { result } = renderHook(() => useReputation(undefined));
+    expect(result.current.reputation).toBeNull();
+    expect(result.current.badge).toBe('NEW');
+    expect(result.current.error).toBeNull();
+  });
+
+  it('returns an error for a malformed (non-Stellar-format) address', () => {
+    const { result } = renderHook(() => useReputation('not-a-valid-address'));
+    expect(result.current.error).toBeInstanceOf(Error);
+    expect(result.current.reputation).toBeNull();
+  });
 });
