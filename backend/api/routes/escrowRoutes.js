@@ -12,6 +12,10 @@ router.use(authMiddleware);
 
 /**
  * @route  GET /api/escrows
+ * @desc   Lists escrows visible to the authenticated caller, paginated and cached.
+ * @param  {import('express').Request} req - Express request; `req.query.page` sets the cache tag.
+ * @param  {import('express').Response} res - Express response used to send the paginated escrow list.
+ * @returns {void} Sends a JSON page of escrow summaries.
  */
 router.get(
   '/',
@@ -38,11 +42,19 @@ router.get(
  * @query  sortOrder   asc | desc  (default: desc)
  * @query  page        default 1
  * @query  limit       default 20, max 100
+ * @param  {import('express').Request} req - Express request carrying the search query params above.
+ * @param  {import('express').Response} res - Express response used to send matching escrows.
+ * @returns {void} Sends a JSON page of escrows matching the search criteria.
  */
 router.get('/search', validatePagination, escrowController.searchEscrowsV1);
 
 /**
  * @route  POST /api/escrows/broadcast
+ * @desc   Validates and broadcasts a signed "create escrow" transaction, then
+ *         invalidates cached escrow list entries so new escrows show up immediately.
+ * @param  {import('express').Request} req - Express request containing the signed transaction envelope in `req.body`.
+ * @param  {import('express').Response} res - Express response used to send the broadcast result.
+ * @returns {void} Sends the broadcast/transaction result as JSON.
  */
 router.post(
   '/broadcast',
@@ -53,6 +65,10 @@ router.post(
 
 /**
  * @route  GET /api/escrows/:id/milestones
+ * @desc   Lists the milestones belonging to a single escrow, paginated and cached.
+ * @param  {import('express').Request} req - Express request; `req.params.id` identifies the escrow.
+ * @param  {import('express').Response} res - Express response used to send the paginated milestone list.
+ * @returns {void} Sends a JSON page of milestones for the given escrow.
  */
 router.get(
   '/:id/milestones',
@@ -67,6 +83,10 @@ router.get(
 
 /**
  * @route  GET /api/escrows/:id/milestones/:milestoneId
+ * @desc   Fetches a single milestone within an escrow.
+ * @param  {import('express').Request} req - Express request; `req.params.id` and `req.params.milestoneId` identify the resource.
+ * @param  {import('express').Response} res - Express response used to send the milestone.
+ * @returns {void} Sends the requested milestone as JSON.
  */
 router.get(
   '/:id/milestones/:milestoneId',
@@ -83,6 +103,10 @@ router.get(
 
 /**
  * @route  GET /api/escrows/:id
+ * @desc   Fetches a single escrow by id.
+ * @param  {import('express').Request} req - Express request; `req.params.id` identifies the escrow.
+ * @param  {import('express').Response} res - Express response used to send the escrow.
+ * @returns {void} Sends the requested escrow as JSON.
  */
 router.get(
   '/:id',
@@ -94,4 +118,8 @@ router.get(
   escrowController.getEscrow,
 );
 
+/**
+ * Express router exposing the `/api/escrows` resource endpoints.
+ * @returns {import('express').Router} Configured escrow routes.
+ */
 export default router;
