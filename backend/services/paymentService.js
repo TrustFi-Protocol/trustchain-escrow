@@ -20,13 +20,21 @@ async function getStripeClient() {
 
 const STELLAR_HORIZON = process.env.STELLAR_HORIZON_URL || 'https://horizon-testnet.stellar.org';
 
+// Issue #98: named the previously-inline numeric literals below.
+/** Order-book depth requested from Horizon — only the best bid is needed for a spot price. */
+const ORDER_BOOK_BEST_BID_LIMIT = 1;
+/** Cents per dollar, used to convert Stripe's cent-denominated amounts to whole USD. */
+const CENTS_PER_USD = 100;
+/** Default page size for `getByAddress` when the caller doesn't specify one. */
+const DEFAULT_PAYMENT_PAGE_SIZE = 50;
+
 /**
  * Fetch the current XLM/USD price from Stellar DEX via Horizon.
  * Returns price as a float (USD per 1 XLM).
  */
-async function getXlmUsdPrice() {
+export async function getXlmUsdPrice() {
   const res = await fetch(
-    `${STELLAR_HORIZON}/order_book?selling_asset_type=native&buying_asset_type=credit_alphanum4&buying_asset_code=USDC&buying_asset_issuer=${process.env.USDC_ISSUER}&limit=1`,
+    `${STELLAR_HORIZON}/order_book?selling_asset_type=native&buying_asset_type=credit_alphanum4&buying_asset_code=USDC&buying_asset_issuer=${process.env.USDC_ISSUER}&limit=${ORDER_BOOK_BEST_BID_LIMIT}`,
   );
   if (!res.ok) throw new Error('Failed to fetch XLM price');
   const { bids } = await res.json();
@@ -44,7 +52,7 @@ async function getXlmUsdPrice() {
  */
 async function createCheckoutSession({ address, amountUsd, escrowId }) {
   const stripe = await getStripeClient();
-  const amountCents = Math.round(amountUsd * 100);
+  const amountCents = Math.round(amountUsd * CENTS_PER_USD);
   const tenantId = getCurrentTenantId();
 
   const session = await stripe.checkout.sessions.create({
@@ -122,7 +130,7 @@ async function getById(paymentId) {
  * Get payments for a Stellar address — paginated with a safe default limit.
  * Uses the @@index([address, createdAt(sort: Desc)]) composite index.
  */
-async function getByAddress(address, { take = 50, skip = 0 } = {}) {
+async function getByAddress(address, { take = DEFAULT_PAYMENT_PAGE_SIZE, skip = 0 } = {}) {
   return prisma.payment.findMany({
     where: { address },
     orderBy: { createdAt: 'desc' },
@@ -185,7 +193,7 @@ async function handleWebhook(rawBody, signature) {
       let amountCrypto = null;
       try {
         const xlmPrice = await getXlmUsdPrice();
-        const usd = session.amount_total / 100;
+        const usd = session.amount_total / CENTS_PER_USD;
         amountCrypto = (usd / xlmPrice).toFixed(7) + ' XLM';
       } catch {
         // non-fatal — conversion is informational
