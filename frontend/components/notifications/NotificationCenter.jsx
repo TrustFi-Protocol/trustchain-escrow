@@ -79,6 +79,12 @@ function NotificationItem({ notification, onMarkAsRead, onDismiss }) {
  * Bell trigger + dropdown panel showing escrow lifecycle notifications.
  * Fully keyboard operable (Escape closes, focus returns to the trigger)
  * and screen-reader friendly (aria-live region announces the unread count).
+ *
+ * Must be rendered under a `NotificationProvider` (see NotificationContext.jsx).
+ *
+ * @param {object} [props]
+ * @param {string} [props.className] — extra classes merged onto the root wrapper.
+ * @returns {JSX.Element} The bell trigger button and, when open, its dropdown panel.
  */
 export default function NotificationBell({ className }) {
   const { notifications, unreadCount, markAsRead, markAllAsRead, dismiss, clearAll } =

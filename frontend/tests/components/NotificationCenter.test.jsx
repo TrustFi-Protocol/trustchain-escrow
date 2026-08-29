@@ -76,4 +76,31 @@ describe('NotificationBell / NotificationCenter', () => {
     fireEvent.click(dismissButtons[0]);
     expect(screen.queryByText('Dispute opened')).not.toBeInTheDocument();
   });
+
+  // Issue #114: the existing tests above already cover the core happy path
+  // (open/close, Escape + focus return, mark-as-read, dismiss, empty state);
+  // these fill in the remaining gaps — the two bulk actions and click-outside.
+
+  it('marks every notification as read via "Mark all read"', () => {
+    renderBell();
+    fireEvent.click(screen.getByRole('button', { name: /notifications, 1 unread/i }));
+    fireEvent.click(screen.getByText('Mark all read'));
+    expect(screen.getByRole('button', { name: /notifications$/i })).toBeInTheDocument();
+  });
+
+  it('removes every notification via "Clear all"', () => {
+    renderBell();
+    fireEvent.click(screen.getByRole('button', { name: /notifications/i }));
+    fireEvent.click(screen.getByText('Clear all'));
+    expect(screen.getByText(/all caught up/i)).toBeInTheDocument();
+  });
+
+  it('closes the panel when clicking outside it', () => {
+    renderBell();
+    fireEvent.click(screen.getByRole('button', { name: /notifications/i }));
+    expect(screen.getByRole('region')).toBeInTheDocument();
+
+    fireEvent.mouseDown(document.body);
+    expect(screen.queryByRole('region')).not.toBeInTheDocument();
+  });
 });

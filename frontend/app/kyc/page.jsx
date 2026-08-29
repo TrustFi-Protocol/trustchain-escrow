@@ -82,9 +82,10 @@ export default function KycPage() {
 
   const handleSdkError = (err) => setError(err?.message ?? 'Verification error');
 
-  if (!address) return null;
-
-  if (loading) {
+  // Issue #117: the wallet address isn't known synchronously on first
+  // render — rendering nothing here (rather than a loading indicator) is
+  // what read as a "blank UI" while the wallet/KYC status resolve.
+  if (!address || loading) {
     return (
       <div className="flex justify-center py-20">
         <Spinner />
