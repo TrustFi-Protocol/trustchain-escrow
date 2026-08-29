@@ -72,20 +72,30 @@ function InputField({ param, value, onChange }) {
     return 'text';
   };
 
+  // Issue #88 (closest real match — this is the console's per-param input,
+  // not a MilestoneTracker.jsx, which doesn't exist): the checkbox variant
+  // had a visible <label> that wasn't programmatically associated with it
+  // (no htmlFor/id, no aria-label), so screen readers announced it with no
+  // accessible name.
+  const inputId = `abi-param-${param.name}`
+
   return (
     <div className="space-y-1">
-      <label className="text-xs font-medium text-gray-400">
+      <label htmlFor={inputId} className="text-xs font-medium text-gray-400">
         {param.name} <span className="text-gray-600">({param.type})</span>
       </label>
       {getInputType(param.type) === 'checkbox' ? (
         <input
+          id={inputId}
           type="checkbox"
           checked={value === 'true'}
           onChange={(e) => onChange(e.target.checked ? 'true' : 'false')}
           className="accent-indigo-500"
+          aria-label={`${param.name} (${param.type})`}
         />
       ) : (
         <input
+          id={inputId}
           type={getInputType(param.type)}
           value={value}
           onChange={(e) => onChange(e.target.value)}

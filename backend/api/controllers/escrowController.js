@@ -44,6 +44,61 @@ async function invalidateEscrowCache(id) {
   console.log(`[Cache] Invalidated escrow:${id} + escrows collection`);
 }
 
+// Issue #87: listEscrows and searchEscrowsV1 repeated near-identical
+// status/amount-range/date-range/sort filter-building logic. Extracted so
+// both endpoints stay in sync with one implementation each.
+
+/**
+ * Validates and normalizes a comma-separated status filter string into a
+ * Prisma `where.status` value.
+ * @returns {{ value: string|{in: string[]} } | { error: object }}
+ */
+function parseStatusFilter(status) {
+  const statuses = status
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const invalid = statuses.filter((s) => !VALID_ESCROW_STATUSES.has(s));
+  if (invalid.length > 0) {
+    return {
+      error: {
+        error: 'Invalid status value(s)',
+        invalid,
+        allowed: [...VALID_ESCROW_STATUSES],
+      },
+    };
+  }
+  return { value: statuses.length === 1 ? statuses[0] : { in: statuses } };
+}
+
+/** Applies totalAmount min/max range filters onto a Prisma `where` clause, in place. */
+function applyAmountRange(where, minAmount, maxAmount) {
+  if (minAmount) where.totalAmount = { ...where.totalAmount, gte: String(minAmount) };
+  if (maxAmount) where.totalAmount = { ...where.totalAmount, lte: String(maxAmount) };
+}
+
+/**
+ * Applies createdAt date-range filters onto a Prisma `where` clause, in
+ * place. `dateTo` is treated as inclusive of the whole day.
+ */
+function applyDateRange(where, dateFrom, dateTo) {
+  if (!dateFrom && !dateTo) return;
+  where.createdAt = {};
+  if (dateFrom) where.createdAt.gte = new Date(dateFrom);
+  if (dateTo) {
+    const end = new Date(dateTo);
+    end.setHours(23, 59, 59, 999);
+    where.createdAt.lte = end;
+  }
+}
+
+/** Resolves sortBy/sortOrder against the allowed lists, falling back to createdAt/desc. */
+function resolveSort(sortBy, sortOrder) {
+  const resolvedSortBy = VALID_SORT_FIELDS.includes(sortBy) ? sortBy : 'createdAt';
+  const resolvedSortOrder = VALID_SORT_ORDERS.includes(sortOrder) ? sortOrder : 'desc';
+  return { [resolvedSortBy]: resolvedSortOrder };
+}
+
 /** Log cache hit/miss metrics to console for monitoring. */
 function logCacheMetrics() {
   const m = cache.analytics();
@@ -84,19 +139,9 @@ const listEscrows = async (req, res) => {
     const where = {};
 
     if (status) {
-      const statuses = status
-        .split(',')
-        .map((s) => s.trim())
-        .filter(Boolean);
-      const invalid = statuses.filter((s) => !VALID_ESCROW_STATUSES.has(s));
-      if (invalid.length > 0) {
-        return res.status(400).json({
-          error: 'Invalid status value(s)',
-          invalid,
-          allowed: [...VALID_ESCROW_STATUSES],
-        });
-      }
-      where.status = statuses.length === 1 ? statuses[0] : { in: statuses };
+      const parsed = parseStatusFilter(status);
+      if (parsed.error) return res.status(400).json(parsed.error);
+      where.status = parsed.value;
     }
     if (client) where.clientAddress = client;
     if (freelancer) where.freelancerAddress = freelancer;
@@ -111,22 +156,9 @@ const listEscrows = async (req, res) => {
       ];
     }
 
-    if (minAmount) where.totalAmount = { ...where.totalAmount, gte: String(minAmount) };
-    if (maxAmount) where.totalAmount = { ...where.totalAmount, lte: String(maxAmount) };
-
-    if (dateFrom || dateTo) {
-      where.createdAt = {};
-      if (dateFrom) where.createdAt.gte = new Date(dateFrom);
-      if (dateTo) {
-        const end = new Date(dateTo);
-        end.setHours(23, 59, 59, 999);
-        where.createdAt.lte = end;
-      }
-    }
-
-    const resolvedSortBy = VALID_SORT_FIELDS.includes(sortBy) ? sortBy : 'createdAt';
-    const resolvedSortOrder = VALID_SORT_ORDERS.includes(sortOrder) ? sortOrder : 'desc';
-    const orderBy = { [resolvedSortBy]: resolvedSortOrder };
+    applyAmountRange(where, minAmount, maxAmount);
+    applyDateRange(where, dateFrom, dateTo);
+    const orderBy = resolveSort(sortBy, sortOrder);
 
     const [data, total] = await prisma.$transaction([
       prisma.escrow.findMany({ where, select: ESCROW_SUMMARY_SELECT, skip, take: limit, orderBy }),
@@ -461,43 +493,18 @@ const searchEscrowsV1 = async (req, res) => {
 
     // Status filter (single or comma-separated)
     if (status) {
-      const statuses = status
-        .split(',')
-        .map((s) => s.trim())
-        .filter(Boolean);
-      const invalid = statuses.filter((s) => !VALID_ESCROW_STATUSES.has(s));
-      if (invalid.length > 0) {
-        return res.status(400).json({
-          error: 'Invalid status value(s)',
-          invalid,
-          allowed: [...VALID_ESCROW_STATUSES],
-        });
-      }
-      where.status = statuses.length === 1 ? statuses[0] : { in: statuses };
+      const parsed = parseStatusFilter(status);
+      if (parsed.error) return res.status(400).json(parsed.error);
+      where.status = parsed.value;
     }
 
     // Exact address filters
     if (creator) where.clientAddress = creator;
     if (arbitrator) where.arbiterAddress = arbitrator;
 
-    // Amount range
-    if (minAmount) where.totalAmount = { ...where.totalAmount, gte: String(minAmount) };
-    if (maxAmount) where.totalAmount = { ...where.totalAmount, lte: String(maxAmount) };
-
-    // Date range
-    if (dateFrom || dateTo) {
-      where.createdAt = {};
-      if (dateFrom) where.createdAt.gte = new Date(dateFrom);
-      if (dateTo) {
-        const end = new Date(dateTo);
-        end.setHours(23, 59, 59, 999);
-        where.createdAt.lte = end;
-      }
-    }
-
-    const resolvedSortBy = VALID_SORT_FIELDS.includes(sortBy) ? sortBy : 'createdAt';
-    const resolvedSortOrder = VALID_SORT_ORDERS.includes(sortOrder) ? sortOrder : 'desc';
-    const orderBy = { [resolvedSortBy]: resolvedSortOrder };
+    applyAmountRange(where, minAmount, maxAmount);
+    applyDateRange(where, dateFrom, dateTo);
+    const orderBy = resolveSort(sortBy, sortOrder);
 
     const [data, total] = await prisma.$transaction([
       prisma.escrow.findMany({

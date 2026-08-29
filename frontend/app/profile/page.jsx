@@ -66,23 +66,40 @@ export default function ProfilePage() {
             {reputation?.score != null && <ReputationBadge score={reputation.score} />}
           </div>
 
+          {/* Issue #90: `isLoading` was already fetched but only passed to
+              EscrowHistoryList below — these three stat counts flashed "0"
+              on every load instead of showing a loading state, since
+              `escrows` starts as an empty array before the real fetch
+              resolves. */}
           <dl className="mt-4 grid grid-cols-2 gap-4 text-sm sm:grid-cols-3">
             <div>
               <dt className="text-gray-500 dark:text-gray-400">Active escrows</dt>
               <dd className="mt-0.5 font-semibold text-gray-900 dark:text-white">
-                {activeCount}
+                {isLoading ? (
+                  <span className="inline-block h-5 w-6 animate-pulse rounded bg-gray-200 dark:bg-gray-800" />
+                ) : (
+                  activeCount
+                )}
               </dd>
             </div>
             <div>
               <dt className="text-gray-500 dark:text-gray-400">Completed</dt>
               <dd className="mt-0.5 font-semibold text-gray-900 dark:text-white">
-                {completedCount}
+                {isLoading ? (
+                  <span className="inline-block h-5 w-6 animate-pulse rounded bg-gray-200 dark:bg-gray-800" />
+                ) : (
+                  completedCount
+                )}
               </dd>
             </div>
             <div>
               <dt className="text-gray-500 dark:text-gray-400">Total escrows</dt>
               <dd className="mt-0.5 font-semibold text-gray-900 dark:text-white">
-                {escrows.length}
+                {isLoading ? (
+                  <span className="inline-block h-5 w-6 animate-pulse rounded bg-gray-200 dark:bg-gray-800" />
+                ) : (
+                  escrows.length
+                )}
               </dd>
             </div>
           </dl>

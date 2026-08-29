@@ -95,9 +95,14 @@ export default function SearchFilters({ filters, onChange, onReset }) {
       </div>
 
       {/* Amount Range */}
+      {/* Issue #89: none of the inputs/select in this panel had an
+          aria-label, htmlFor, or id — their "label" was a plain <p>, so
+          screen readers announced no accessible name for any of them. */}
       <div>
-        <p className={labelCls}>Amount range (USDC)</p>
-        <div className="flex gap-2">
+        <p id="amount-range-label" className={labelCls}>
+          Amount range (USDC)
+        </p>
+        <div className="flex gap-2" role="group" aria-labelledby="amount-range-label">
           <input
             type="number"
             min="0"
@@ -105,6 +110,7 @@ export default function SearchFilters({ filters, onChange, onReset }) {
             className={inputCls}
             value={filters.minAmount}
             onChange={(e) => onChange('minAmount', e.target.value)}
+            aria-label="Minimum amount (USDC)"
           />
           <input
             type="number"
@@ -113,36 +119,44 @@ export default function SearchFilters({ filters, onChange, onReset }) {
             className={inputCls}
             value={filters.maxAmount}
             onChange={(e) => onChange('maxAmount', e.target.value)}
+            aria-label="Maximum amount (USDC)"
           />
         </div>
       </div>
 
       {/* Date Range */}
       <div>
-        <p className={labelCls}>Date range</p>
-        <div className="space-y-2">
+        <p id="date-range-label" className={labelCls}>
+          Date range
+        </p>
+        <div className="space-y-2" role="group" aria-labelledby="date-range-label">
           <input
             type="date"
             className={inputCls}
             value={filters.dateFrom}
             onChange={(e) => onChange('dateFrom', e.target.value)}
+            aria-label="Date from"
           />
           <input
             type="date"
             className={inputCls}
             value={filters.dateTo}
             onChange={(e) => onChange('dateTo', e.target.value)}
+            aria-label="Date to"
           />
         </div>
       </div>
 
       {/* Sort */}
       <div>
-        <p className={labelCls}>Sort by</p>
+        <p id="sort-by-label" className={labelCls}>
+          Sort by
+        </p>
         <select
           className={inputCls}
           value={filters.sort}
           onChange={(e) => onChange('sort', e.target.value)}
+          aria-labelledby="sort-by-label"
         >
           {SORT_OPTIONS.map((o) => (
             <option key={o.value} value={o.value}>
