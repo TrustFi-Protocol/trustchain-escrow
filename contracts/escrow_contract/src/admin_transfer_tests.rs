@@ -99,4 +99,23 @@ mod admin_transfer_tests {
         let result = contract.try_accept_admin(&another);
         assert_eq!(result, Err(Ok(EscrowError::E3)));
     }
+
+    // Every other rejection above is asserted via `try_*` + a pattern match
+    // on the returned error. But `require_admin`/ownership checks reject by
+    // returning `Err`, which the plain (non-`try_`) client call unwraps into
+    // a hard panic — matching this crate's convention elsewhere (see
+    // `reentrancy_guard_tests.rs`) of also covering that panic path directly,
+    // not just the `try_` Result path.
+    #[test]
+    #[should_panic]
+    fn test_accept_admin_wrong_acceptor_panics() {
+        let (env, admin, contract) = setup();
+        let new_admin = Address::generate(&env);
+        let impostor = Address::generate(&env);
+
+        contract.propose_admin(&admin, &new_admin);
+
+        // Must panic (EscrowError::E3) rather than silently no-op or succeed.
+        contract.accept_admin(&impostor);
+    }
 }
