@@ -21,6 +21,11 @@ import Spinner from './Spinner';
 import { truncateAddress } from '../../lib/truncateAddress';
 import { useI18n } from '../../i18n/index.jsx';
 
+// ── Constants ─────────────────────────────────────────────────────────────────
+
+/** How long the "Copied!" tooltip state stays shown before reverting. */
+const COPY_FEEDBACK_RESET_MS = 1500;
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 // ── Status Dot ────────────────────────────────────────────────────────────────
@@ -49,7 +54,7 @@ function AddressWithTooltip({ address }) {
     try {
       await navigator.clipboard.writeText(address);
       setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
+      setTimeout(() => setCopied(false), COPY_FEEDBACK_RESET_MS);
     } catch {
       /* ignore */
     }
