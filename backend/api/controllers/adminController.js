@@ -14,6 +14,21 @@ import { getUserUsage } from '../middleware/rateLimiter.js';
 
 const adminLog = getLogger();
 
+// Issue #105: named cache TTLs — previously inline numeric literals with no
+// explanation of what they represented or why they differ per endpoint.
+/** Reputation leaderboard: large, expensive query; tolerates being 30s stale. */
+const LEADERBOARD_CACHE_TTL_SECONDS = 30;
+/** Single user's reputation + escrow stats: less contended, cached longer. */
+const USER_PROFILE_CACHE_TTL_SECONDS = 60;
+/** Disputes list: admins expect near-real-time visibility into open disputes. */
+const DISPUTES_LIST_CACHE_TTL_SECONDS = 15;
+/** Platform-wide stats summary. */
+const PLATFORM_STATS_CACHE_TTL_SECONDS = 30;
+/** Audit logs list: same near-real-time expectation as the disputes list. */
+const AUDIT_LOGS_CACHE_TTL_SECONDS = 15;
+/** Upper bound on `platformFeePercent` — a value is a percentage, so 100 is the ceiling. */
+const MAX_PLATFORM_FEE_PERCENT = 100;
+
 // JSON.stringify does not guarantee key order, so two objects with the same
 // contents but different insertion order produce different cache keys.
 // This sorted replacer ensures deterministic serialisation for cache keys.
@@ -116,7 +131,7 @@ const listUsers = async (req, res) => {
     ]);
 
     const result = buildPaginatedResponse(users, { total, page, limit });
-    await cache.set(cacheKey, result, 30);
+    await cache.set(cacheKey, result, LEADERBOARD_CACHE_TTL_SECONDS);
     res.json(result);
   } catch (err) {
     logControllerError('admin.listUsers', err, req);
@@ -153,7 +168,7 @@ const getUserDetail = async (req, res) => {
       stats: { escrowsAsClient, escrowsAsFreelancer },
     };
 
-    await cache.set(cacheKey, result, 60);
+    await cache.set(cacheKey, result, USER_PROFILE_CACHE_TTL_SECONDS);
     res.json(result);
   } catch (err) {
     logControllerError('admin.getUserDetail', err, req);
@@ -288,7 +303,7 @@ const listDisputes = async (req, res) => {
     ]);
 
     const result = buildPaginatedResponse(disputes, { total, page, limit });
-    await cache.set(cacheKey, result, 15);
+    await cache.set(cacheKey, result, DISPUTES_LIST_CACHE_TTL_SECONDS);
     res.json(result);
   } catch (err) {
     logControllerError('admin.listDisputes', err, req);
@@ -409,7 +424,7 @@ const getStats = async (req, res) => {
       },
     };
 
-    await cache.set(cacheKey, result, 30);
+    await cache.set(cacheKey, result, PLATFORM_STATS_CACHE_TTL_SECONDS);
     res.json(result);
   } catch (err) {
     logControllerError('admin.getStats', err, req);
@@ -441,7 +456,7 @@ const getAuditLogs = async (req, res) => {
     ]);
 
     const result = buildPaginatedResponse(logs, { total, page, limit });
-    await cache.set(cacheKey, result, 15);
+    await cache.set(cacheKey, result, AUDIT_LOGS_CACHE_TTL_SECONDS);
     res.json(result);
   } catch (err) {
     logControllerError('admin.getAuditLogs', err, req);

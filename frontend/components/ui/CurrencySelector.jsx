@@ -19,6 +19,8 @@ export default function CurrencySelector({ size = 'md', className = '' }) {
   const { currency, setCurrency, ratesLoading } = useCurrency();
   const [open, setOpen] = useState(false);
   const ref = useRef(null);
+  const triggerRef = useRef(null);
+  const optionRefs = useRef([]);
 
   // Close on outside click
   useEffect(() => {
@@ -30,12 +32,42 @@ export default function CurrencySelector({ size = 'md', className = '' }) {
   }, []);
 
   const current = SUPPORTED_CURRENCIES.find((c) => c.code === currency) ?? SUPPORTED_CURRENCIES[0];
+  const currentIndex = SUPPORTED_CURRENCIES.findIndex((c) => c.code === currency);
+
+  // Issue #103: Escape closes the list and returns focus to the trigger, and
+  // Up/Down roam between options — previously this listbox was only
+  // dismissible via an outside click and had no keyboard navigation between
+  // options at all.
+  useEffect(() => {
+    if (!open) return undefined;
+    optionRefs.current[currentIndex >= 0 ? currentIndex : 0]?.focus();
+
+    const handler = (e) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        setOpen(false);
+        triggerRef.current?.focus();
+        return;
+      }
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        const focusedIndex = optionRefs.current.findIndex((el) => el === document.activeElement);
+        const base = focusedIndex === -1 ? 0 : focusedIndex;
+        const delta = e.key === 'ArrowDown' ? 1 : -1;
+        const next = (base + delta + SUPPORTED_CURRENCIES.length) % SUPPORTED_CURRENCIES.length;
+        optionRefs.current[next]?.focus();
+      }
+    };
+    document.addEventListener('keydown', handler);
+    return () => document.removeEventListener('keydown', handler);
+  }, [open, currentIndex]);
 
   const sizeClasses = size === 'sm' ? 'text-xs px-2 py-1 gap-1' : 'text-sm px-3 py-2 gap-1.5';
 
   return (
     <div ref={ref} className={`relative ${className}`}>
       <button
+        ref={triggerRef}
         onClick={() => setOpen((v) => !v)}
         aria-haspopup="listbox"
         aria-expanded={open}
@@ -65,12 +97,16 @@ export default function CurrencySelector({ size = 'md', className = '' }) {
           className="absolute right-0 mt-1 w-52 bg-gray-900 border border-gray-700 rounded-lg
             shadow-xl z-50 py-1 max-h-72 overflow-y-auto"
         >
-          {SUPPORTED_CURRENCIES.map((c) => (
+          {SUPPORTED_CURRENCIES.map((c, index) => (
             <li key={c.code} role="option" aria-selected={c.code === currency}>
               <button
+                ref={(el) => {
+                  optionRefs.current[index] = el;
+                }}
                 onClick={() => {
                   setCurrency(c.code);
                   setOpen(false);
+                  triggerRef.current?.focus();
                 }}
                 className={`w-full flex items-center justify-between px-3 py-2 text-sm
                   transition-colors hover:bg-gray-800

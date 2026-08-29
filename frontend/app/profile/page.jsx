@@ -63,7 +63,16 @@ export default function ProfilePage() {
             <h1 className="font-mono text-xl font-bold text-gray-900 dark:text-white">
               <TruncatedAddress address={address} />
             </h1>
-            {reputation?.score != null && <ReputationBadge score={reputation.score} />}
+            {reputation?.score != null ? (
+              <ReputationBadge score={reputation.score} />
+            ) : (
+              // Issue #106: useReputation renders nothing while unimplemented
+              // (see hooks/useReputation.js, Issue #39) — show a friendly
+              // placeholder instead of silently omitting the badge.
+              <span className="text-xs text-gray-500 dark:text-gray-400">
+                No reputation score yet
+              </span>
+            )}
           </div>
 
           <dl className="mt-4 grid grid-cols-2 gap-4 text-sm sm:grid-cols-3">
