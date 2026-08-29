@@ -15,7 +15,18 @@ function requireOwnedWallet(req, res) {
   return walletAddress;
 }
 
-/** POST /api/payments/checkout — create a Stripe checkout session. */
+/**
+ * POST /api/payments/checkout — create a Stripe checkout session for funding
+ * an escrow via fiat on-ramp. Requires the caller's authenticated wallet to
+ * match the requested Stellar address and to have Approved KYC status.
+ *
+ * @param {import('express').Request} req - Express request; body must include
+ *   `address` (Stellar G-address), `amountUsd` (positive number), and
+ *   `escrowId`.
+ * @param {import('express').Response} res - Express response. Responds with
+ *   the created checkout session on success, or a 4xx/5xx error otherwise.
+ * @returns {Promise<void>}
+ */
 const createCheckout = async (req, res) => {
   try {
     const { address, amountUsd, escrowId } = req.body;
@@ -48,7 +59,17 @@ const createCheckout = async (req, res) => {
   }
 };
 
-/** GET /api/payments/status/:sessionId — get payment status by Stripe session ID. */
+/**
+ * GET /api/payments/status/:sessionId — fetch a payment by its Stripe
+ * checkout session ID. Only the wallet that owns the payment may access it.
+ *
+ * @param {import('express').Request} req - Express request; `req.params.sessionId`
+ *   is the Stripe checkout session ID to look up.
+ * @param {import('express').Response} res - Express response. Responds with
+ *   the payment record on success, 404 if not found, or 403 if the
+ *   authenticated wallet doesn't own it.
+ * @returns {Promise<void>}
+ */
 const getStatus = async (req, res) => {
   try {
     const walletAddress = requireOwnedWallet(req, res);
@@ -66,7 +87,16 @@ const getStatus = async (req, res) => {
   }
 };
 
-/** GET /api/payments/:address — list payments for a Stellar address. */
+/**
+ * GET /api/payments/:address — list all payments for a Stellar address.
+ * The requesting wallet may only list its own payment history.
+ *
+ * @param {import('express').Request} req - Express request; `req.params.address`
+ *   is the Stellar G-address to list payments for.
+ * @param {import('express').Response} res - Express response. Responds with
+ *   an array of payments, or a 400/403 error.
+ * @returns {Promise<void>}
+ */
 const listByAddress = async (req, res) => {
   try {
     const { address } = req.params;
@@ -89,7 +119,17 @@ const listByAddress = async (req, res) => {
   }
 };
 
-/** POST /api/payments/:paymentId/refund — issue a full refund. */
+/**
+ * POST /api/payments/:paymentId/refund — issue a full refund for a payment.
+ * Only the wallet that owns the payment may refund it.
+ *
+ * @param {import('express').Request} req - Express request; `req.params.paymentId`
+ *   is the ID of the payment to refund.
+ * @param {import('express').Response} res - Express response. Responds with
+ *   the refunded payment record, 404 if not found, 403 if not owned by the
+ *   caller, or 400 if the payment can't be refunded.
+ * @returns {Promise<void>}
+ */
 const refund = async (req, res) => {
   try {
     const walletAddress = requireOwnedWallet(req, res);
@@ -112,7 +152,17 @@ const refund = async (req, res) => {
   }
 };
 
-/** POST /api/payments/webhook — Stripe webhook receiver. */
+/**
+ * POST /api/payments/webhook — Stripe webhook receiver. Verifies the
+ * `Stripe-Signature` header against the raw request body before delegating
+ * to `paymentService.handleWebhook`.
+ *
+ * @param {import('express').Request} req - Express request; expects a
+ *   `stripe-signature` header and `req.rawBody` set by upstream middleware.
+ * @param {import('express').Response} res - Express response. Responds with
+ *   `{ ok: true }` on success, or 400 if the signature/body is invalid.
+ * @returns {Promise<void>}
+ */
 const webhook = async (req, res) => {
   try {
     const signature = req.headers['stripe-signature'];

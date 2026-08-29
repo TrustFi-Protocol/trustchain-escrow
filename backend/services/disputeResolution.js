@@ -28,6 +28,27 @@ export const ResolutionType = {
 /** Minimum confidence score (0–1) required to auto-resolve without escalation. */
 const AUTO_RESOLVE_THRESHOLD = 0.75;
 
+/** Milliseconds in one hour, used to convert dispute age into hours. */
+const MS_PER_HOUR = 3_600_000;
+
+/** Hours a dispute can sit with no evidence from either party before it's auto-split 50/50. */
+const NO_EVIDENCE_ESCALATION_HOURS = 72;
+
+/** Confidence score when only one party submitted evidence. */
+const ONE_SIDED_EVIDENCE_CONFIDENCE = 0.85;
+
+/** Confidence score when neither party submitted evidence within the escalation window. */
+const NO_EVIDENCE_CONFIDENCE = 0.8;
+
+/** Confidence score when a milestone was approved on-chain before the dispute was raised. */
+const MILESTONE_APPROVED_CONFIDENCE = 0.9;
+
+/** Confidence score when the escrow deadline passed with no milestone submissions. */
+const DEADLINE_PASSED_CONFIDENCE = 0.88;
+
+/** Scale factor for converting a 0–1 clientSplit ratio into integer basis points. */
+const BASIS_POINTS_SCALE = 10_000;
+
 // ── Rule Evaluators ───────────────────────────────────────────────────────────
 
 /**
@@ -49,7 +70,7 @@ const rules = [
       if (clientEvidence.length > 0 && freelancerEvidence.length === 0) {
         return {
           fires: true,
-          confidence: 0.85,
+          confidence: ONE_SIDED_EVIDENCE_CONFIDENCE,
           clientSplit: 1.0,
           resolution:
             'Client submitted evidence; freelancer provided none. Resolved in favour of client.',
@@ -58,7 +79,7 @@ const rules = [
       if (freelancerEvidence.length > 0 && clientEvidence.length === 0) {
         return {
           fires: true,
-          confidence: 0.85,
+          confidence: ONE_SIDED_EVIDENCE_CONFIDENCE,
           clientSplit: 0.0,
           resolution:
             'Freelancer submitted evidence; client provided none. Resolved in favour of freelancer.',
@@ -76,11 +97,11 @@ const rules = [
     name: 'no_evidence',
     evaluate(evidence, escrow) {
       if (evidence.length === 0) {
-        const hoursOpen = (Date.now() - new Date(escrow.raisedAt).getTime()) / 3_600_000;
-        if (hoursOpen >= 72) {
+        const hoursOpen = (Date.now() - new Date(escrow.raisedAt).getTime()) / MS_PER_HOUR;
+        if (hoursOpen >= NO_EVIDENCE_ESCALATION_HOURS) {
           return {
             fires: true,
-            confidence: 0.8,
+            confidence: NO_EVIDENCE_CONFIDENCE,
             clientSplit: 0.5,
             resolution:
               'No evidence submitted by either party within 72 hours. Amount split equally.',
@@ -107,7 +128,7 @@ const rules = [
       if (hasApprovedMilestone) {
         return {
           fires: true,
-          confidence: 0.9,
+          confidence: MILESTONE_APPROVED_CONFIDENCE,
           clientSplit: 0.0,
           resolution:
             'At least one milestone was approved on-chain before the dispute was raised. Resolved in favour of freelancer.',
@@ -130,7 +151,7 @@ const rules = [
       if (deadlinePassed && noSubmissions) {
         return {
           fires: true,
-          confidence: 0.88,
+          confidence: DEADLINE_PASSED_CONFIDENCE,
           clientSplit: 1.0,
           resolution:
             'Escrow deadline passed with no milestone submissions. Resolved in favour of client.',
@@ -185,7 +206,8 @@ export function evaluateRules(dispute, evidence) {
  */
 function computeSplitAmounts(totalAmount, clientSplit) {
   const total = BigInt(totalAmount);
-  const clientBig = (total * BigInt(Math.round(clientSplit * 10_000))) / BigInt(10_000);
+  const clientBig =
+    (total * BigInt(Math.round(clientSplit * BASIS_POINTS_SCALE))) / BigInt(BASIS_POINTS_SCALE);
   const freelancerBig = total - clientBig;
   return {
     clientAmount: clientBig.toString(),
