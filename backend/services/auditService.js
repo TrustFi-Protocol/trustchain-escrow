@@ -83,6 +83,7 @@ export const AuditAction = {
  * @param {object} [entry.metadata]
  * @param {number} [entry.statusCode]
  * @param {string} [entry.ipAddress]
+ * @returns {Promise<void>}
  */
 export async function log(entry) {
   try {
