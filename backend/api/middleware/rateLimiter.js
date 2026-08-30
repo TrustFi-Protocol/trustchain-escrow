@@ -109,6 +109,34 @@ class SlidingWindowStore {
 // Module-level shared store (single instance per process).
 const slidingStore = new SlidingWindowStore();
 
+// ── Adaptive load configuration ───────────────────────────────────────────────
+
+/** Error-rate threshold above which the limit is halved (50 % of traffic erroring). */
+const ADAPTIVE_HIGH_LOAD_THRESHOLD = 0.5;
+
+/** Error-rate threshold above which the limit is reduced by 25 % (25 % of traffic erroring). */
+const ADAPTIVE_MEDIUM_LOAD_THRESHOLD = 0.25;
+
+/** Multiplier applied to max when error rate exceeds the high-load threshold (50 % capacity). */
+const ADAPTIVE_FACTOR_HIGH_LOAD = 0.5;
+
+/** Multiplier applied to max when error rate exceeds the medium-load threshold (75 % capacity). */
+const ADAPTIVE_FACTOR_MEDIUM_LOAD = 0.75;
+
+/** Multiplier applied to max when server load is nominal (no reduction). */
+const ADAPTIVE_FACTOR_NORMAL = 1.0;
+
+// ── Retry-After header configuration ─────────────────────────────────────────
+
+/** Divisor used to convert milliseconds to seconds in the Retry-After header. */
+const MS_PER_SECOND = 1000;
+
+/** Minimum value (in seconds) returned in the Retry-After header. */
+const RETRY_AFTER_MIN_SECONDS = 1;
+
+/** Floor value passed to Math.max when computing X-RateLimit-Remaining (never negative). */
+const RATE_REMAINING_FLOOR = 0;
+
 // ── Adaptive load tracking ────────────────────────────────────────────────────
 
 let _adaptiveErrorRate = 0;
@@ -119,13 +147,13 @@ let _adaptiveErrorRate = 0;
  * @param {number} errorRate - fraction of requests that resulted in 5xx (0–1)
  */
 export function updateAdaptiveLoad(errorRate) {
-  _adaptiveErrorRate = Math.max(0, Math.min(1, errorRate));
+  _adaptiveErrorRate = Math.max(RATE_REMAINING_FLOOR, Math.min(ADAPTIVE_FACTOR_NORMAL, errorRate));
 }
 
 function _getAdaptiveFactor() {
-  if (_adaptiveErrorRate > 0.5) return 0.5;
-  if (_adaptiveErrorRate > 0.25) return 0.75;
-  return 1.0;
+  if (_adaptiveErrorRate > ADAPTIVE_HIGH_LOAD_THRESHOLD) return ADAPTIVE_FACTOR_HIGH_LOAD;
+  if (_adaptiveErrorRate > ADAPTIVE_MEDIUM_LOAD_THRESHOLD) return ADAPTIVE_FACTOR_MEDIUM_LOAD;
+  return ADAPTIVE_FACTOR_NORMAL;
 }
 
 // ── Public store accessors (backwards compat + testing) ───────────────────────
@@ -197,7 +225,7 @@ export function createSlidingWindowRateLimiter({
       const burstKey = `${key}:burst`;
       const burstCount = slidingStore.count(burstKey, burstWindowMs, now);
       if (burstCount >= burstMax) {
-        res.set('Retry-After', String(Math.ceil(burstWindowMs / 1000)));
+        res.set('Retry-After', String(Math.ceil(burstWindowMs / MS_PER_SECOND)));
         res.set('X-RateLimit-Limit', String(effectiveMax));
         res.set('X-RateLimit-Remaining', '0');
         return res
@@ -211,13 +239,13 @@ export function createSlidingWindowRateLimiter({
     const count = slidingStore.count(key, windowMs, now);
 
     res.set('X-RateLimit-Limit', String(effectiveMax));
-    res.set('X-RateLimit-Remaining', String(Math.max(0, effectiveMax - count - 1)));
-    res.set('X-RateLimit-Reset', String(Math.ceil((now + windowMs) / 1000)));
+    res.set('X-RateLimit-Remaining', String(Math.max(RATE_REMAINING_FLOOR, effectiveMax - count - 1)));
+    res.set('X-RateLimit-Reset', String(Math.ceil((now + windowMs) / MS_PER_SECOND)));
 
     if (count >= effectiveMax) {
       const oldest = slidingStore.oldest(key);
       const retryAfterMs = oldest ? oldest + windowMs - now : windowMs;
-      res.set('Retry-After', String(Math.max(1, Math.ceil(retryAfterMs / 1000))));
+      res.set('Retry-After', String(Math.max(RETRY_AFTER_MIN_SECONDS, Math.ceil(retryAfterMs / MS_PER_SECOND))));
       res.set('X-RateLimit-Remaining', '0');
       return res.status(429).json({ error: message, code: 'RATE_LIMIT_EXCEEDED' });
     }
