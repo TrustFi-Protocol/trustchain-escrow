@@ -28,6 +28,32 @@ export const ResolutionType = {
 /** Minimum confidence score (0–1) required to auto-resolve without escalation. */
 const AUTO_RESOLVE_THRESHOLD = 0.75;
 
+/** Milliseconds in one hour, used to convert dispute age to hours. */
+const MS_PER_HOUR = 3_600_000;
+
+/**
+ * How long a dispute must sit with no evidence from either party before the
+ * `no_evidence` rule fires and splits the amount 50/50.
+ */
+const NO_EVIDENCE_ESCALATION_HOURS = 72;
+
+/** Basis-point scale used to round `clientSplit` ratios before BigInt math. */
+const SPLIT_BASIS_POINTS = 10_000;
+
+// Confidence scores per rule (0–1). Rules with a stronger, less ambiguous
+// signal (e.g. an on-chain approved milestone) get higher confidence.
+const CONFIDENCE_ONE_SIDED_EVIDENCE = 0.85;
+const CONFIDENCE_NO_EVIDENCE = 0.8;
+const CONFIDENCE_MILESTONE_APPROVED = 0.9;
+const CONFIDENCE_DEADLINE_PASSED_NO_SUBMISSION = 0.88;
+
+// clientSplit ratios (0–1): the fraction of the disputed amount awarded to
+// the client. 1.0 = fully to client, 0.0 = fully to freelancer, 0.5 = split
+// evenly between both parties.
+const SPLIT_FULLY_TO_CLIENT = 1.0;
+const SPLIT_FULLY_TO_FREELANCER = 0.0;
+const SPLIT_EVENLY = 0.5;
+
 // ── Rule Evaluators ───────────────────────────────────────────────────────────
 
 /**
@@ -49,8 +75,8 @@ const rules = [
       if (clientEvidence.length > 0 && freelancerEvidence.length === 0) {
         return {
           fires: true,
-          confidence: 0.85,
-          clientSplit: 1.0,
+          confidence: CONFIDENCE_ONE_SIDED_EVIDENCE,
+          clientSplit: SPLIT_FULLY_TO_CLIENT,
           resolution:
             'Client submitted evidence; freelancer provided none. Resolved in favour of client.',
         };
@@ -58,8 +84,8 @@ const rules = [
       if (freelancerEvidence.length > 0 && clientEvidence.length === 0) {
         return {
           fires: true,
-          confidence: 0.85,
-          clientSplit: 0.0,
+          confidence: CONFIDENCE_ONE_SIDED_EVIDENCE,
+          clientSplit: SPLIT_FULLY_TO_FREELANCER,
           resolution:
             'Freelancer submitted evidence; client provided none. Resolved in favour of freelancer.',
         };
@@ -76,14 +102,13 @@ const rules = [
     name: 'no_evidence',
     evaluate(evidence, escrow) {
       if (evidence.length === 0) {
-        const hoursOpen = (Date.now() - new Date(escrow.raisedAt).getTime()) / 3_600_000;
-        if (hoursOpen >= 72) {
+        const hoursOpen = (Date.now() - new Date(escrow.raisedAt).getTime()) / MS_PER_HOUR;
+        if (hoursOpen >= NO_EVIDENCE_ESCALATION_HOURS) {
           return {
             fires: true,
-            confidence: 0.8,
-            clientSplit: 0.5,
-            resolution:
-              'No evidence submitted by either party within 72 hours. Amount split equally.',
+            confidence: CONFIDENCE_NO_EVIDENCE,
+            clientSplit: SPLIT_EVENLY,
+            resolution: `No evidence submitted by either party within ${NO_EVIDENCE_ESCALATION_HOURS} hours. Amount split equally.`,
           };
         }
       }
@@ -107,8 +132,8 @@ const rules = [
       if (hasApprovedMilestone) {
         return {
           fires: true,
-          confidence: 0.9,
-          clientSplit: 0.0,
+          confidence: CONFIDENCE_MILESTONE_APPROVED,
+          clientSplit: SPLIT_FULLY_TO_FREELANCER,
           resolution:
             'At least one milestone was approved on-chain before the dispute was raised. Resolved in favour of freelancer.',
         };
@@ -130,8 +155,8 @@ const rules = [
       if (deadlinePassed && noSubmissions) {
         return {
           fires: true,
-          confidence: 0.88,
-          clientSplit: 1.0,
+          confidence: CONFIDENCE_DEADLINE_PASSED_NO_SUBMISSION,
+          clientSplit: SPLIT_FULLY_TO_CLIENT,
           resolution:
             'Escrow deadline passed with no milestone submissions. Resolved in favour of client.',
         };
@@ -171,7 +196,7 @@ export function evaluateRules(dispute, evidence) {
     shouldAutoResolve: false,
     rule: null,
     confidence: 0,
-    clientSplit: 0.5,
+    clientSplit: SPLIT_EVENLY,
     resolution: 'No automated rule reached sufficient confidence. Escalated for manual review.',
   };
 }
@@ -185,7 +210,8 @@ export function evaluateRules(dispute, evidence) {
  */
 function computeSplitAmounts(totalAmount, clientSplit) {
   const total = BigInt(totalAmount);
-  const clientBig = (total * BigInt(Math.round(clientSplit * 10_000))) / BigInt(10_000);
+  const clientBig =
+    (total * BigInt(Math.round(clientSplit * SPLIT_BASIS_POINTS))) / BigInt(SPLIT_BASIS_POINTS);
   const freelancerBig = total - clientBig;
   return {
     clientAmount: clientBig.toString(),

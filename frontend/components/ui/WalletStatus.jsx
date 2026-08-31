@@ -23,6 +23,9 @@ import { useI18n } from '../../i18n/index.jsx';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
+/** How long the "✅ Copied!" tooltip state stays visible after a successful address copy. */
+const COPY_FEEDBACK_DURATION_MS = 1500;
+
 // ── Status Dot ────────────────────────────────────────────────────────────────
 
 function StatusDot({ status }) {
@@ -49,7 +52,7 @@ function AddressWithTooltip({ address }) {
     try {
       await navigator.clipboard.writeText(address);
       setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
+      setTimeout(() => setCopied(false), COPY_FEEDBACK_DURATION_MS);
     } catch {
       /* ignore */
     }

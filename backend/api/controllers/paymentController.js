@@ -15,7 +15,21 @@ function requireOwnedWallet(req, res) {
   return walletAddress;
 }
 
-/** POST /api/payments/checkout — create a Stripe checkout session. */
+/**
+ * POST /api/payments/checkout — create a Stripe checkout session for
+ * funding an escrow via fiat on-ramp.
+ *
+ * Requires the authenticated wallet to match the `address` in the request
+ * body, and requires that address to have an `Approved` KYC status.
+ *
+ * @param {import('express').Request} req - Express request. Expects
+ *   `req.body.address` (Stellar address), `req.body.amountUsd` (positive
+ *   number), and optional `req.body.escrowId`.
+ * @param {import('express').Response} res - Express response. Responds
+ *   with the created checkout session on success (200), or a 400/403/500
+ *   error body.
+ * @returns {Promise<void>} Resolves once the response has been sent.
+ */
 const createCheckout = async (req, res) => {
   try {
     const { address, amountUsd, escrowId } = req.body;
@@ -48,7 +62,18 @@ const createCheckout = async (req, res) => {
   }
 };
 
-/** GET /api/payments/status/:sessionId — get payment status by Stripe session ID. */
+/**
+ * GET /api/payments/status/:sessionId — get payment status by Stripe
+ * checkout session ID.
+ *
+ * Only the wallet that owns the payment may look it up.
+ *
+ * @param {import('express').Request} req - Express request. Expects
+ *   `req.params.sessionId` (Stripe checkout session ID).
+ * @param {import('express').Response} res - Express response. Responds
+ *   with the payment record (200), or a 403/404/500 error body.
+ * @returns {Promise<void>} Resolves once the response has been sent.
+ */
 const getStatus = async (req, res) => {
   try {
     const walletAddress = requireOwnedWallet(req, res);
@@ -66,7 +91,17 @@ const getStatus = async (req, res) => {
   }
 };
 
-/** GET /api/payments/:address — list payments for a Stellar address. */
+/**
+ * GET /api/payments/:address — list all payments for a Stellar address.
+ *
+ * The requested address must match the authenticated wallet's address.
+ *
+ * @param {import('express').Request} req - Express request. Expects
+ *   `req.params.address` (Stellar address).
+ * @param {import('express').Response} res - Express response. Responds
+ *   with an array of payment records (200), or a 400/403/500 error body.
+ * @returns {Promise<void>} Resolves once the response has been sent.
+ */
 const listByAddress = async (req, res) => {
   try {
     const { address } = req.params;
@@ -89,7 +124,18 @@ const listByAddress = async (req, res) => {
   }
 };
 
-/** POST /api/payments/:paymentId/refund — issue a full refund. */
+/**
+ * POST /api/payments/:paymentId/refund — issue a full refund for a
+ * payment owned by the authenticated wallet.
+ *
+ * @param {import('express').Request} req - Express request. Expects
+ *   `req.params.paymentId`.
+ * @param {import('express').Response} res - Express response. Responds
+ *   with the updated payment record (200), or a 400/403/404/500 error
+ *   body (a 400 is used when the underlying refund is rejected as
+ *   unrefundable, e.g. "Cannot refund ...").
+ * @returns {Promise<void>} Resolves once the response has been sent.
+ */
 const refund = async (req, res) => {
   try {
     const walletAddress = requireOwnedWallet(req, res);
@@ -112,7 +158,20 @@ const refund = async (req, res) => {
   }
 };
 
-/** POST /api/payments/webhook — Stripe webhook receiver. */
+/**
+ * POST /api/payments/webhook — Stripe webhook receiver.
+ *
+ * Verifies the `stripe-signature` header against the raw request body
+ * before dispatching to `paymentService.handleWebhook`. Unauthenticated
+ * (called directly by Stripe, not a logged-in wallet).
+ *
+ * @param {import('express').Request} req - Express request. Expects the
+ *   `stripe-signature` header and a raw (unparsed) `req.rawBody`.
+ * @param {import('express').Response} res - Express response. Responds
+ *   `{ ok: true }` (200) on success, or a 400 error body if signature
+ *   verification or event handling fails.
+ * @returns {Promise<void>} Resolves once the response has been sent.
+ */
 const webhook = async (req, res) => {
   try {
     const signature = req.headers['stripe-signature'];
