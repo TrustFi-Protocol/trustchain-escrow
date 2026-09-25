@@ -1,92 +1,187 @@
 /**
- * Incident Controller
+ * Incident Controller — Issue #231: Add Incident Impact Links to Escrows
  *
- * REST API for incident lifecycle management.
- * All routes require admin authentication.
+ * Routes:
+ * POST   /api/admin/incidents              — Create incident
+ * GET    /api/admin/incidents              — List incidents
+ * GET    /api/admin/incidents/:id          — Get incident detail
+ * PATCH  /api/admin/incidents/:id          — Update incident status
+ * POST   /api/admin/incidents/:id/escrows  — Link escrow to incident
+ * DELETE /api/admin/incidents/:id/escrows  — Unlink escrow from incident
+ * GET    /api/admin/incidents/:id/escrows  — List affected escrows
  */
 
 import incidentService from '../../services/incidentService.js';
+import { logControllerError } from '../../config/logger.js';
+import { buildPaginatedResponse, parsePagination } from '../../lib/pagination.js';
 
+/** POST /api/admin/incidents — Create a new incident. */
 const createIncident = async (req, res) => {
   try {
-    const { title, description, severity, affectedServices, commander, runbookUrl } = req.body;
-    if (!title || !description) {
-      return res.status(400).json({ error: 'title and description are required' });
+    const { title, description, severity } = req.body;
+
+    if (!title || !severity) {
+      return res.status(400).json({ error: 'Title and severity required' });
     }
-    const incident = await incidentService.createIncident({
+
+    const tenantId = req.tenant?.id || 'default';
+    const createdBy = req.user?.address || 'system';
+
+    const incident = await incidentService.createIncident(
+      tenantId,
       title,
-      description,
+      description || '',
       severity,
-      affectedServices: affectedServices ?? [],
-      commander,
-      runbookUrl,
-      createdBy: req.user?.address ?? req.headers['x-admin-api-key']?.slice(0, 8) ?? 'admin',
-    });
+      createdBy,
+    );
+
     res.status(201).json(incident);
   } catch (err) {
+    logControllerError('incident.create', err, req);
     res.status(500).json({ error: err.message });
   }
 };
 
-const listIncidents = (req, res) => {
+/** GET /api/admin/incidents — List incidents (paginated, tenant-scoped). */
+const listIncidents = async (req, res) => {
   try {
-    const { status, severity } = req.query;
-    res.json(incidentService.listIncidents({ status, severity }));
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-};
+    const { page, limit, skip } = parsePagination(req.query);
+    const { status } = req.query;
+    const tenantId = req.tenant?.id || 'default';
 
-const getIncident = (req, res) => {
-  try {
-    res.json(incidentService.getIncident(req.params.id));
-  } catch (err) {
-    res.status(404).json({ error: err.message });
-  }
-};
-
-const updateStatus = async (req, res) => {
-  try {
-    const { status, note } = req.body;
-    if (!status) return res.status(400).json({ error: 'status is required' });
-    const actor = req.user?.address ?? 'admin';
-    const incident = await incidentService.updateIncidentStatus(req.params.id, status, {
-      actor,
-      note,
+    const { incidents, total } = await incidentService.listIncidents(tenantId, {
+      status,
+      skip,
+      take: limit,
     });
-    res.json(incident);
+
+    res.json(buildPaginatedResponse(incidents, { total, page, limit }));
   } catch (err) {
-    const code = err.message.includes('not found')
-      ? 404
-      : err.message.includes('Invalid transition')
-        ? 422
-        : 500;
-    res.status(code).json({ error: err.message });
+    logControllerError('incident.list', err, req);
+    res.status(500).json({ error: err.message });
   }
 };
 
-const attachPostMortem = (req, res) => {
+/** GET /api/admin/incidents/:id — Get incident detail with affected escrows count. */
+const getIncident = async (req, res) => {
   try {
-    const incident = incidentService.attachPostMortem(req.params.id, req.body);
+    const { id } = req.params;
+    const tenantId = req.tenant?.id || 'default';
+
+    const incident = await incidentService.getIncident(id, tenantId);
+
+    if (!incident) {
+      return res.status(404).json({ error: 'Incident not found' });
+    }
+
     res.json(incident);
   } catch (err) {
-    const code = err.message.includes('not found') ? 404 : 422;
-    res.status(code).json({ error: err.message });
+    logControllerError('incident.get', err, req);
+    res.status(500).json({ error: err.message });
   }
 };
 
-const getOnCall = (_req, res) => {
-  res.json({
-    current: incidentService.getCurrentOnCall(),
-    schedule: incidentService.getOnCallSchedule(),
-  });
+/** PATCH /api/admin/incidents/:id — Update incident status. */
+const updateIncident = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { status } = req.body;
+    const tenantId = req.tenant?.id || 'default';
+
+    if (!status) {
+      return res.status(400).json({ error: 'Status required' });
+    }
+
+    // Verify incident exists in tenant
+    const incident = await incidentService.getIncident(id, tenantId);
+    if (!incident) {
+      return res.status(404).json({ error: 'Incident not found' });
+    }
+
+    const updated = await incidentService.updateStatus(id, tenantId, status);
+    res.json(updated);
+  } catch (err) {
+    logControllerError('incident.update', err, req);
+    res.status(500).json({ error: err.message });
+  }
+};
+
+/** POST /api/admin/incidents/:id/escrows — Link an escrow to an incident. */
+const addEscrow = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { escrowId, reason } = req.body;
+    const tenantId = req.tenant?.id || 'default';
+
+    if (!escrowId) {
+      return res.status(400).json({ error: 'Escrow ID required' });
+    }
+
+    // Verify incident exists
+    const incident = await incidentService.getIncident(id, tenantId);
+    if (!incident) {
+      return res.status(404).json({ error: 'Incident not found' });
+    }
+
+    const link = await incidentService.addEscrow(id, tenantId, BigInt(escrowId), reason || '');
+    res.status(201).json(link);
+  } catch (err) {
+    logControllerError('incident.addEscrow', err, req);
+    res.status(500).json({ error: err.message });
+  }
+};
+
+/** DELETE /api/admin/incidents/:id/escrows/:escrowId — Unlink an escrow. */
+const removeEscrow = async (req, res) => {
+  try {
+    const { id, escrowId } = req.params;
+    const tenantId = req.tenant?.id || 'default';
+
+    // Verify incident exists
+    const incident = await incidentService.getIncident(id, tenantId);
+    if (!incident) {
+      return res.status(404).json({ error: 'Incident not found' });
+    }
+
+    await incidentService.removeEscrow(id, BigInt(escrowId));
+    res.json({ ok: true });
+  } catch (err) {
+    logControllerError('incident.removeEscrow', err, req);
+    res.status(500).json({ error: err.message });
+  }
+};
+
+/** GET /api/admin/incidents/:id/escrows — List affected escrows (paginated). */
+const getAffectedEscrows = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { page, limit, skip } = parsePagination(req.query);
+    const tenantId = req.tenant?.id || 'default';
+
+    // Verify incident exists
+    const incident = await incidentService.getIncident(id, tenantId);
+    if (!incident) {
+      return res.status(404).json({ error: 'Incident not found' });
+    }
+
+    const { escrows, total } = await incidentService.getAffectedEscrows(id, tenantId, {
+      skip,
+      take: limit,
+    });
+
+    res.json(buildPaginatedResponse(escrows, { total, page, limit }));
+  } catch (err) {
+    logControllerError('incident.getAffectedEscrows', err, req);
+    res.status(500).json({ error: err.message });
+  }
 };
 
 export default {
   createIncident,
   listIncidents,
   getIncident,
-  updateStatus,
-  attachPostMortem,
-  getOnCall,
+  updateIncident,
+  addEscrow,
+  removeEscrow,
+  getAffectedEscrows,
 };

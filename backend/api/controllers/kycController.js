@@ -1,4 +1,5 @@
 import kycService from '../../services/kycService.js';
+import kycHistoryService from '../../services/kycHistoryService.js';
 import { logControllerError } from '../../config/logger.js';
 import { buildPaginatedResponse, parsePagination } from '../../lib/pagination.js';
 
@@ -35,6 +36,28 @@ const getStatus = async (req, res) => {
   }
 };
 
+/** GET /api/kyc/history/:address — get KYC status change history (Issue #229). */
+const getHistory = async (req, res) => {
+  try {
+    const { address } = req.params;
+    if (!STELLAR_ADDRESS_RE.test(address)) {
+      return res.status(400).json({ error: 'Invalid Stellar address' });
+    }
+
+    const { page, limit, skip } = parsePagination(req.query);
+    const tenantId = req.tenant?.id || 'default';
+    const { events, total } = await kycHistoryService.getHistory(tenantId, address, {
+      skip,
+      take: limit,
+    });
+
+    res.json(buildPaginatedResponse(events, { total, page, limit }));
+  } catch (err) {
+    logControllerError('kyc.getHistory', err, req);
+    res.status(500).json({ error: err.message });
+  }
+};
+
 /** POST /api/kyc/webhook — Sumsub webhook receiver. */
 const webhook = async (req, res) => {
   try {
@@ -63,4 +86,23 @@ const adminList = async (req, res) => {
   }
 };
 
-export default { getToken, getStatus, webhook, adminList };
+/** GET /api/kyc/admin/history — list all KYC history for admin review (Issue #229). */
+const adminHistory = async (req, res) => {
+  try {
+    const { page, limit, skip } = parsePagination(req.query);
+    const { address } = req.query;
+    const tenantId = req.tenant?.id || 'default';
+    const { events, total } = await kycHistoryService.getAllHistory(tenantId, {
+      skip,
+      take: limit,
+      address,
+    });
+
+    res.json(buildPaginatedResponse(events, { total, page, limit }));
+  } catch (err) {
+    logControllerError('kyc.adminHistory', err, req);
+    res.status(500).json({ error: err.message });
+  }
+};
+
+export default { getToken, getStatus, getHistory, webhook, adminList, adminHistory };
