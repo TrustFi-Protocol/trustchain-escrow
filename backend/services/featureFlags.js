@@ -6,12 +6,30 @@
  * that individual tenants can opt-in or opt-out of features independently of
  * the platform-wide rollout configuration.
  *
+ * Evaluation is sampled-logged at the module logger level. The sampling rate
+ * is controlled by FEATURE_FLAG_LOG_SAMPLE_RATE (float 0.0–1.0, default 0.1).
+ * Logs never include userId/address in plain text — only a hashed token is
+ * emitted when needed for debugging.
+ *
  * @module services/featureFlags
  */
 
 import crypto from 'crypto';
 import prisma from '../lib/prisma.js';
 import { log, AuditCategory } from './auditService.js';
+import { createModuleLogger } from '../config/logger.js';
+
+/** Module-level structured logger (named `logger` to avoid shadowing the audit `log` import). */
+const logger = createModuleLogger('featureFlags');
+
+/**
+ * Sampling rate for evaluation log lines.
+ * Reads FEATURE_FLAG_LOG_SAMPLE_RATE from the environment at call time so that
+ * it can be overridden in tests without restarting the process.
+ */
+function getSamplingRate() {
+  return parseFloat(process.env.FEATURE_FLAG_LOG_SAMPLE_RATE || '0.1');
+}
 
 /**
  * Deterministic hash of userId + flagKey → integer 0–99.
@@ -23,14 +41,62 @@ function hashBucket(userId, flagKey) {
 }
 
 /**
+ * One-way hash of an arbitrary string for privacy-safe log fields.
+ * Truncated to 16 hex chars — enough for correlation, not enough for reversal.
+ *
+ * @param {string} value
+ * @returns {string}
+ */
+function privacyHash(value) {
+  return crypto.createHash('sha256').update(String(value)).digest('hex').slice(0, 16);
+}
+
+/**
+ * Emit a sampled evaluation log line.
+ *
+ * Fields included:
+ *   flagKey    — the flag being evaluated
+ *   tenantId   — raw tenantId (tenant IDs are not user PII)
+ *   userHash   — truncated SHA-256 of userId (never plain text)
+ *   result     — boolean outcome
+ *   variant    — 'on' | 'off'
+ *   reason     — why the result was reached
+ *
+ * @param {object} opts
+ * @param {string}  opts.flagKey
+ * @param {unknown} opts.tenantId
+ * @param {unknown} opts.userId
+ * @param {boolean} opts.result
+ * @param {string}  opts.reason
+ */
+function emitEvalLog({ flagKey, tenantId, userId, result, reason }) {
+  const samplingRate = getSamplingRate();
+  if (Math.random() >= samplingRate) return;
+
+  logger.info('feature_flag_eval', {
+    flagKey,
+    tenantId: tenantId != null ? String(tenantId) : undefined,
+    userHash: userId != null ? privacyHash(String(userId)) : undefined,
+    result,
+    variant: result ? 'on' : 'off',
+    reason,
+  });
+}
+
+/**
  * Evaluate whether a feature flag is active for a given user context.
  *
  * Evaluation order:
- *  1. Tenant-level override exists and overrides the flag → use tenant value
- *  2. Flag disabled globally → false (unless user is explicitly targeted)
- *  3. User explicitly in targetUsers → true
- *  4. User's hash bucket < percentage → true
- *  5. Otherwise → false
+ *  1. Flag not found                   → false  (reason: flag_not_found)
+ *  2. Tenant-level override exists     → use tenant value
+ *                                         (reason: tenant_override_true | tenant_override_false)
+ *  3. Flag disabled globally and user
+ *     is in targetUsers                → true   (reason: globally_disabled_targeted)
+ *  4. Flag disabled globally and user
+ *     is NOT in targetUsers            → false  (reason: globally_disabled_not_targeted)
+ *  5. User explicitly in targetUsers   → true   (reason: explicitly_targeted)
+ *  6. User's hash bucket < percentage  → true   (reason: percentage_rollout)
+ *  7. Otherwise                        → false  (reason: percentage_rollout)
  *
  * @param {string} flagKey
  * @param {{ id: string|number, tenantId?: string|number }} userContext
@@ -38,22 +104,70 @@ function hashBucket(userId, flagKey) {
  */
 export async function isFeatureEnabled(flagKey, userContext) {
   const flag = await prisma.featureFlag.findUnique({ where: { key: flagKey } });
-  if (!flag) return false;
 
-  // Check for tenant-level override first
+  if (!flag) {
+    emitEvalLog({
+      flagKey,
+      tenantId: userContext.tenantId,
+      userId: userContext.id,
+      result: false,
+      reason: 'flag_not_found',
+    });
+    return false;
+  }
+
+  // ── Tenant-level override ────────────────────────────────────────────────
   if (userContext.tenantId) {
     const tenantOverride = await getTenantFlagOverride(flagKey, String(userContext.tenantId));
     if (tenantOverride !== null) {
+      const reason = tenantOverride ? 'tenant_override_true' : 'tenant_override_false';
+      emitEvalLog({
+        flagKey,
+        tenantId: userContext.tenantId,
+        userId: userContext.id,
+        result: tenantOverride,
+        reason,
+      });
       return tenantOverride;
     }
   }
 
+  // ── Globally disabled path ───────────────────────────────────────────────
   if (!flag.isEnabled) {
-    // Still allow explicitly targeted users even when globally disabled
-    return flag.targetUsers.includes(String(userContext.id));
+    const targeted = flag.targetUsers.includes(String(userContext.id));
+    const reason = targeted ? 'globally_disabled_targeted' : 'globally_disabled_not_targeted';
+    emitEvalLog({
+      flagKey,
+      tenantId: userContext.tenantId,
+      userId: userContext.id,
+      result: targeted,
+      reason,
+    });
+    return targeted;
   }
-  if (flag.targetUsers.includes(String(userContext.id))) return true;
-  return hashBucket(String(userContext.id), flagKey) < flag.percentage;
+
+  // ── Explicit targeting ───────────────────────────────────────────────────
+  if (flag.targetUsers.includes(String(userContext.id))) {
+    emitEvalLog({
+      flagKey,
+      tenantId: userContext.tenantId,
+      userId: userContext.id,
+      result: true,
+      reason: 'explicitly_targeted',
+    });
+    return true;
+  }
+
+  // ── Percentage rollout ───────────────────────────────────────────────────
+  const result = hashBucket(String(userContext.id), flagKey) < flag.percentage;
+  emitEvalLog({
+    flagKey,
+    tenantId: userContext.tenantId,
+    userId: userContext.id,
+    result,
+    reason: 'percentage_rollout',
+  });
+  return result;
 }
 
 /**
@@ -86,9 +200,7 @@ async function getTenantFlagOverride(flagKey, tenantId) {
 export async function listFlagsForTenant(tenantId) {
   const [globalFlags, overrides] = await Promise.all([
     prisma.featureFlag.findMany({ orderBy: { key: 'asc' } }),
-    prisma.tenantFeatureFlagOverride
-      .findMany({ where: { tenantId } })
-      .catch(() => []), // table may not exist yet
+    prisma.tenantFeatureFlagOverride.findMany({ where: { tenantId } }).catch(() => []), // table may not exist yet
   ]);
 
   const overrideMap = new Map(overrides.map((o) => [o.flagKey, o.isEnabled]));
@@ -114,14 +226,16 @@ export async function listFlagsForTenant(tenantId) {
  * @param {string} adminId  - who made the change (for audit)
  */
 export async function setTenantFlagOverride(flagKey, tenantId, isEnabled, adminId) {
-  await prisma.tenantFeatureFlagOverride.upsert({
-    where: { tenantId_flagKey: { tenantId, flagKey } },
-    create: { tenantId, flagKey, isEnabled },
-    update: { isEnabled },
-  }).catch(async () => {
-    // If the model doesn't exist yet, log a warning but don't crash
-    console.warn('[FeatureFlags] tenantFeatureFlagOverride model unavailable — skipping upsert');
-  });
+  await prisma.tenantFeatureFlagOverride
+    .upsert({
+      where: { tenantId_flagKey: { tenantId, flagKey } },
+      create: { tenantId, flagKey, isEnabled },
+      update: { isEnabled },
+    })
+    .catch(async () => {
+      // If the model doesn't exist yet, log a warning but don't crash
+      console.warn('[FeatureFlags] tenantFeatureFlagOverride model unavailable — skipping upsert');
+    });
 
   await _auditFlagChange('TENANT_FLAG_OVERRIDE_SET', flagKey, adminId, {
     tenantId,
@@ -137,9 +251,11 @@ export async function setTenantFlagOverride(flagKey, tenantId, isEnabled, adminI
  * @param {string} adminId
  */
 export async function removeTenantFlagOverride(flagKey, tenantId, adminId) {
-  await prisma.tenantFeatureFlagOverride.delete({
-    where: { tenantId_flagKey: { tenantId, flagKey } },
-  }).catch(() => {}); // no-op if override didn't exist
+  await prisma.tenantFeatureFlagOverride
+    .delete({
+      where: { tenantId_flagKey: { tenantId, flagKey } },
+    })
+    .catch(() => {}); // no-op if override didn't exist
 
   await _auditFlagChange('TENANT_FLAG_OVERRIDE_REMOVED', flagKey, adminId, { tenantId });
 }

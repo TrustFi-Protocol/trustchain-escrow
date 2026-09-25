@@ -1,3 +1,4 @@
+import { validationResult, query } from 'express-validator';
 import webhookService from '../../services/webhookService.js';
 
 const MAX_EVENT_TYPES = 20;
@@ -70,8 +71,34 @@ const deleteSubscription = async (req, res) => {
   }
 };
 
+/**
+ * Validation chains for GET /:id/deliveries query parameters.
+ * Exported so webhookRoutes.js can apply them before the handler runs.
+ */
+export const deliveriesQueryRules = [
+  query('page')
+    .optional({ values: 'falsy' })
+    .isInt({ min: 1 })
+    .withMessage('page must be an integer >= 1'),
+  query('limit')
+    .optional({ values: 'falsy' })
+    .isInt({ min: 1, max: 100 })
+    .withMessage('limit must be an integer between 1 and 100'),
+];
+
 const getDeliveries = async (req, res) => {
   try {
+    // Surface any validation errors produced by deliveriesQueryRules middleware.
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      const details = errors.array({ onlyFirstError: false }).map((e) => ({
+        field: e.path,
+        message: e.msg,
+        location: e.location,
+      }));
+      return res.status(400).json({ error: 'Validation failed', details });
+    }
+
     const page = Number(req.query.page || 1);
     const limit = Math.min(Number(req.query.limit || 30), 100);
 
@@ -82,7 +109,8 @@ const getDeliveries = async (req, res) => {
       limit,
     });
 
-    res.json(result);
+    // result shape from service: { page, limit, total, deliveries, summary }
+    res.json({ data: result });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

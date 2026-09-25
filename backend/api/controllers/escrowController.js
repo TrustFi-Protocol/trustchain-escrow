@@ -19,6 +19,7 @@ import {
   signedXdrBody,
   paginationQuery,
   handleValidationErrors,
+  validateEscrowTemplate,
 } from '../../middleware/validation.js';
 
 const ESCROW_SUMMARY_SELECT = {
@@ -235,7 +236,9 @@ const broadcastCreateEscrow = async (req, res) => {
       });
     }
 
-    return res.status(200).json({ hash: result.hash, escrowId: escrowId ? String(escrowId) : null });
+    return res
+      .status(200)
+      .json({ hash: result.hash, escrowId: escrowId ? String(escrowId) : null });
   } catch (err) {
     logControllerError('escrow.broadcastCreateEscrow', err, req);
     res.status(500).json({ error: err.message });
@@ -517,6 +520,38 @@ const searchEscrowsV1 = async (req, res) => {
   }
 };
 
+// ── Issue #204: Escrow template validation ────────────────────────────────────
+
+/**
+ * POST /api/escrows/templates/validate
+ *
+ * Validates an escrow template payload without persisting anything.
+ * The validateEscrowTemplate middleware (from validation.js) short-circuits
+ * with 400 + structured errors on failure, so this handler only runs on the
+ * happy path and returns a success summary.
+ */
+const validateTemplate = (req, res) => {
+  const { milestones = [], totalAmount } = req.body;
+
+  const milestoneCount = milestones.length;
+  const computedTotal = milestones.reduce((sum, m) => sum + Number(m.amount), 0);
+
+  // Use the declared totalAmount when provided (already verified to match by middleware),
+  // otherwise use the computed sum.
+  const resolvedTotal =
+    totalAmount !== undefined && totalAmount !== null && totalAmount !== ''
+      ? Number(totalAmount)
+      : computedTotal;
+
+  return res.status(200).json({
+    valid: true,
+    summary: {
+      totalAmount: resolvedTotal,
+      milestoneCount,
+    },
+  });
+};
+
 export default {
   listEscrows,
   getEscrow,
@@ -529,9 +564,11 @@ export default {
   getSuccessRate,
   invalidateStatsCaches,
   searchEscrowsV1,
+  validateTemplate,
 };
 
 // ── Validation rule sets (used by escrowRoutes) ───────────────────────────────
 export const validateBroadcast = [signedXdrBody, handleValidationErrors];
 export const validateEscrowId = [escrowIdParam, handleValidationErrors];
 export const validatePagination = [...paginationQuery, handleValidationErrors];
+export { validateEscrowTemplate };

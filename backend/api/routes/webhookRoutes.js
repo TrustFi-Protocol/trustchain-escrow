@@ -1,5 +1,6 @@
 import express from 'express';
-import webhookController from '../controllers/webhookController.js';
+import webhookController, { deliveriesQueryRules } from '../controllers/webhookController.js';
+import { validate } from '../middleware/validation.js';
 import { createSlidingWindowRateLimiter } from '../middleware/rateLimiter.js';
 
 const router = express.Router();
@@ -22,6 +23,6 @@ const subscribeRateLimit = createSlidingWindowRateLimiter({
 router.post('/subscribe', subscribeRateLimit, webhookController.subscribe);
 router.get('/', webhookController.listSubscriptions);
 router.delete('/:id', webhookController.deleteSubscription);
-router.get('/:id/deliveries', webhookController.getDeliveries);
+router.get('/:id/deliveries', validate(deliveriesQueryRules), webhookController.getDeliveries);
 
 export default router;

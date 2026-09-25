@@ -73,9 +73,11 @@ async function deleteSubscription({ id, createdBy }) {
 
 async function getDeliveryHistory({ subscriptionId, createdBy, page = 1, limit = 30 }) {
   const skip = (page - 1) * limit;
+  const where = { subscription: { id: subscriptionId, createdBy } };
+
   const [deliveries, total] = await Promise.all([
     prisma.webhookDelivery.findMany({
-      where: { subscription: { id: subscriptionId, createdBy } },
+      where,
       orderBy: { createdAt: 'desc' },
       skip,
       take: limit,
@@ -90,16 +92,24 @@ async function getDeliveryHistory({ subscriptionId, createdBy, page = 1, limit =
         createdAt: true,
       },
     }),
-    prisma.webhookDelivery.count({
-      where: { subscription: { id: subscriptionId, createdBy } },
-    }),
+    prisma.webhookDelivery.count({ where }),
   ]);
+
+  // Compute status summary from the current page's deliveries — O(n) scan,
+  // no extra DB round-trip needed since n ≤ limit (max 100).
+  const summary = { total: deliveries.length, successful: 0, failed: 0, pending: 0 };
+  for (const d of deliveries) {
+    if (d.status === 'success') summary.successful += 1;
+    else if (d.status === 'failed') summary.failed += 1;
+    else summary.pending += 1;
+  }
 
   return {
     page,
     limit,
     total,
     deliveries,
+    summary,
   };
 }
 

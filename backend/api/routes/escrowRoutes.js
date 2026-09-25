@@ -3,6 +3,7 @@ import escrowController, {
   validateBroadcast,
   validateEscrowId,
   validatePagination,
+  validateEscrowTemplate,
 } from '../controllers/escrowController.js';
 import { cacheResponse, invalidateOn, TTL } from '../middleware/cache.js';
 import authMiddleware from '../middleware/auth.js';
@@ -40,6 +41,17 @@ router.get(
  * @query  limit       default 20, max 100
  */
 router.get('/search', validatePagination, escrowController.searchEscrowsV1);
+
+/**
+ * @route  POST /api/escrows/templates/validate
+ * @desc   Validate an escrow template payload (issue #204).
+ *         Returns { valid: true, summary } on success, or 400 with structured
+ *         errors on validation failure. No data is persisted.
+ *
+ * NOTE: Must be registered BEFORE /broadcast and any /:id routes so that
+ *       Express does not attempt to interpret "templates" as an escrow id.
+ */
+router.post('/templates/validate', validateEscrowTemplate, escrowController.validateTemplate);
 
 /**
  * @route  POST /api/escrows/broadcast
