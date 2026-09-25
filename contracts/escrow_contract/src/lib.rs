@@ -115,11 +115,11 @@ pub use errors::EscrowError;
 use storage::StorageManager;
 pub use types::{
     ApprovalRecord, ContractVersionInfo, DataKey, EscrowFeeSnapshot, EscrowState, EscrowStatus,
-    EscrowTemplate, FeeTier, Milestone, MilestoneStatus, MilestoneTemplate, MultisigConfig,
-    OptionalBytesN32, OptionalPriceCondition, OptionalTimelock, OracleResolutionPayload,
-    PriceCondition, PriceDirection, RecurringInterval, RecurringScheduleStatus, ReputationRecord,
-    StateHistoryEntry, Timelock, MS_APPROVED, MS_DISPUTED, MS_PENDING, MS_REJECTED, MS_RELEASED,
-    MS_SUBMITTED,
+    EscrowTemplate, FeeTier, Milestone, MilestoneStatus, MilestoneTemplate, ModuleRecord,
+    ModuleStatus, MultisigConfig, OptionalBytesN32, OptionalPriceCondition, OptionalTimelock,
+    OracleResolutionPayload, PriceCondition, PriceDirection, RecurringInterval,
+    RecurringScheduleStatus, ReputationRecord, StateHistoryEntry, Timelock, MS_APPROVED,
+    MS_DISPUTED, MS_PENDING, MS_REJECTED, MS_RELEASED, MS_SUBMITTED,
 };
 use types::{CancellationRequest, RecurringPaymentConfig, SlashRecord};
 use types::{FundPayload, ProposalPayload, ProposalType};
@@ -5130,6 +5130,82 @@ impl EscrowContract {
         env.storage()
             .persistent()
             .get(&DataKey::ContractVersion)
+            .ok_or(EscrowError::E2)
+    }
+
+    // ── Module Registry ───────────────────────────────────────────────────────
+
+    /// Register a new extension module or replace an existing one.
+    ///
+    /// Only the contract admin may call this. Registering under an existing
+    /// `name` replaces the previous record (address + status reset to Active).
+    /// Contract entry point: `register_module`.
+    ///
+    /// See the function name for the public contract operation.
+    pub fn register_module(
+        env: Env,
+        caller: Address,
+        name: soroban_sdk::Symbol,
+        module_address: Address,
+    ) -> Result<(), EscrowError> {
+        ContractStorage::require_admin(&env, &caller)?;
+        caller.require_auth();
+
+        let record = ModuleRecord {
+            address: module_address,
+            status: ModuleStatus::Active,
+            updated_at: env.ledger().timestamp(),
+        };
+        env.storage()
+            .instance()
+            .set(&DataKey::Module(name), &record);
+        ContractStorage::bump_instance_ttl(&env);
+        Ok(())
+    }
+
+    /// Disable a previously registered module so it can no longer be invoked.
+    ///
+    /// Only the contract admin may call this. Returns `E2` if the module does
+    /// not exist.
+    /// Contract entry point: `disable_module`.
+    ///
+    /// See the function name for the public contract operation.
+    pub fn disable_module(
+        env: Env,
+        caller: Address,
+        name: soroban_sdk::Symbol,
+    ) -> Result<(), EscrowError> {
+        ContractStorage::require_admin(&env, &caller)?;
+        caller.require_auth();
+
+        let mut record: ModuleRecord = env
+            .storage()
+            .instance()
+            .get(&DataKey::Module(name.clone()))
+            .ok_or(EscrowError::E2)?;
+        record.status = ModuleStatus::Disabled;
+        record.updated_at = env.ledger().timestamp();
+        env.storage()
+            .instance()
+            .set(&DataKey::Module(name), &record);
+        ContractStorage::bump_instance_ttl(&env);
+        Ok(())
+    }
+
+    /// Fetch the record for a registered module by name.
+    ///
+    /// Returns `E2` if no module with that name has been registered.
+    /// Contract entry point: `get_module`.
+    ///
+    /// See the function name for the public contract operation.
+    pub fn get_module(
+        env: Env,
+        name: soroban_sdk::Symbol,
+    ) -> Result<ModuleRecord, EscrowError> {
+        ContractStorage::require_initialized(&env)?;
+        env.storage()
+            .instance()
+            .get(&DataKey::Module(name))
             .ok_or(EscrowError::E2)
     }
 

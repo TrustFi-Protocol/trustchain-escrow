@@ -758,6 +758,8 @@ pub enum DataKey {
     ContractVersion,
     /// Per-escrow state transition history — key: u64, value: Vec<StateHistoryEntry>
     StateHistory(u64),
+    /// Registered module record by name — key: Symbol, value: ModuleRecord
+    Module(soroban_sdk::Symbol),
 }
 
 /// Tracks the contract *code* version (distinct from `storage::STORAGE_VERSION`,
@@ -824,4 +826,29 @@ pub struct DexSwapRecord {
     pub swapped_at: Option<u64>,
     /// Whether the swap was successful.
     pub success: bool,
+}
+
+/// Status of a registered module.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ModuleStatus {
+    /// Module is active and callable.
+    Active,
+    /// Module has been administratively disabled and may not be invoked.
+    Disabled,
+}
+
+/// A registered extension module record.
+///
+/// Modules are external contract addresses that extend the escrow contract's
+/// capability. Only the admin may register, replace, or disable them.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ModuleRecord {
+    /// On-chain contract address that backs this module.
+    pub address: Address,
+    /// Current operational status of the module.
+    pub status: ModuleStatus,
+    /// Ledger timestamp when this record was last updated.
+    pub updated_at: u64,
 }
