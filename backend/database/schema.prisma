@@ -52,6 +52,9 @@ model Tenant {
   webhookSubscriptions WebhookSubscription[]
   payments             Payment[]
   kycVerifications     KycVerification[]
+  kycHistory          KycHistory[]
+  exportJobs          ExportJob[]
+  incidents           Incident[]
   adminAuditLogs       AdminAuditLog[]
   auditLogs            AuditLog[]
   chatRoomKeys         ChatRoomKey[]
@@ -576,6 +579,110 @@ model KycVerification {
   @@index([tenantId, status])
   @@index([status])
   @@map("kyc_verifications")
+}
+
+// ── KYC History (Timeline) ───────────────────────────────────────────────────
+
+/// Immutable timeline of KYC status changes for audit and user visibility.
+/// Records who changed the status, why, and when.
+model KycHistory {
+  id           Int       @id @default(autoincrement())
+  tenantId     String    @map("tenant_id")
+  address      String    // Stellar address of the user
+  oldStatus    KycStatus @map("old_status")
+  newStatus    KycStatus @map("new_status")
+  /// Actor: "system", "admin", or Stellar address for webhook events
+  actor        String
+  /// Reason for the change, if provided by human actor
+  reason       String    @default("")
+  /// Additional context (rejection labels, review notes, etc.)
+  metadata     Json      @default("{}")
+  createdAt    DateTime  @default(now()) @map("created_at")
+
+  @@index([tenantId, address])
+  @@index([tenantId, createdAt(sort: Desc)])
+  @@index([address, createdAt(sort: Desc)])
+  @@map("kyc_history")
+}
+
+// ── Export Jobs ──────────────────────────────────────────────────────────────
+
+/// Long-running export job tracking for GDPR data exports, reports, etc.
+model ExportJob {
+  id        String   @id @default(cuid())
+  tenantId  String   @map("tenant_id")
+  requestBy String   @map("request_by") // Stellar address or "system"
+  /// Type: "gdpr_export", "escrow_report", "audit_log_export", etc.
+  type      String
+  /// Status: queued, running, completed, failed, cancelled
+  status    String   @default("queued")
+  /// File download URL once completed
+  fileUrl   String?  @map("file_url")
+  /// S3/storage key for cleanup
+  fileKey   String?  @map("file_key")
+  /// Failure reason if status is failed
+  errorMsg  String?  @map("error_msg")
+  /// Progress percentage (0-100)
+  progress  Int      @default(0)
+  /// Total items being processed
+  totalItems Int?    @map("total_items")
+  /// Items processed so far
+  itemsProcessed Int? @map("items_processed")
+  /// Filters/params (JSON)
+  params    Json     @default("{}")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+  expiresAt DateTime? @map("expires_at") // When the download expires
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+
+  @@index([tenantId, status])
+  @@index([tenantId, createdAt(sort: Desc)])
+  @@index([requestBy])
+  @@index([status])
+  @@map("export_jobs")
+}
+
+// ── Incidents ────────────────────────────────────────────────────────────────
+
+/// Major system incidents tracked for visibility and linked escrows.
+model Incident {
+  id          String   @id @default(cuid())
+  tenantId    String   @map("tenant_id")
+  title       String
+  description String   @db.Text
+  severity    String   // "low", "medium", "high", "critical"
+  status      String   @default("open") // "open", "resolved", "investigating"
+  startTime   DateTime @map("start_time")
+  endTime     DateTime? @map("end_time")
+  createdBy   String   @map("created_by") // Admin Stellar address
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+  escrows IncidentEscrow[]
+
+  @@index([tenantId, status])
+  @@index([tenantId, createdAt(sort: Desc)])
+  @@index([severity])
+  @@map("incidents")
+}
+
+/// Link between incidents and affected escrows
+model IncidentEscrow {
+  id        String @id @default(cuid())
+  tenantId  String @map("tenant_id")
+  incidentId String @map("incident_id")
+  escrowId  BigInt @map("escrow_id") // On-chain escrow ID
+  /// Why this escrow was affected (e.g. "delayed approval", "data loss")
+  reason    String @default("")
+
+  incident Incident @relation(fields: [incidentId], references: [id], onDelete: Cascade)
+
+  @@unique([incidentId, escrowId])
+  @@index([tenantId, escrowId])
+  @@index([incidentId])
+  @@map("incident_escrows")
 }
 
 // ── Admin Audit Log ───────────────────────────────────────────────────────────
