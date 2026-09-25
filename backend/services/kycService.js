@@ -8,6 +8,7 @@
 import crypto from 'crypto';
 import prisma from '../lib/prisma.js';
 import auditService, { AuditCategory, AuditAction } from './auditService.js';
+import kycHistoryService from './kycHistoryService.js';
 
 const {
   SUMSUB_APP_TOKEN,
@@ -106,6 +107,12 @@ async function handleWebhook(payload) {
   const newStatus = statusMap[type];
   if (!newStatus) return null; // unhandled event type
 
+  // Get existing record to track old status for history (Issue #229)
+  const existing = await prisma.kycVerification.findUnique({
+    where: { address: externalUserId },
+  });
+  const oldStatus = existing?.status || 'Pending';
+
   const record = await prisma.kycVerification.upsert({
     where: { address: externalUserId },
     update: {
@@ -120,8 +127,19 @@ async function handleWebhook(payload) {
       status: newStatus,
       reviewResult: reviewResult?.reviewAnswer ?? null,
       rejectLabels: reviewResult?.rejectLabels ?? [],
+      tenantId: 'default', // Assume default tenant for webhook events
     },
   });
+
+  // Record to history timeline (Issue #229)
+  const tenantId = record.tenantId || 'default';
+  await kycHistoryService.recordWebhookChange(
+    tenantId,
+    externalUserId,
+    oldStatus,
+    newStatus,
+    payload,
+  );
 
   const actionMap = {
     applicantReviewed:
