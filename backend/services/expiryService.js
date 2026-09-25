@@ -23,6 +23,41 @@ const DEFAULT_POLL_INTERVAL_MS = parseInt(process.env.EXPIRY_POLL_INTERVAL_MS ||
 
 let pollTimer = null;
 
+// Idempotency keys (escrowId:deadline) for expiry notifications already sent.
+const sentExpiryNotifications = new Set();
+let expiryNotifier = async () => {};
+
+/**
+ * Register the function used to notify parties of an expiry event.
+ *
+ * @param {(escrow: object) => Promise<void>} fn
+ */
+export function setExpiryNotifier(fn) {
+  expiryNotifier = fn;
+}
+
+/**
+ * Send the expiry notification at most once per escrow and expiry event.
+ *
+ * @param {object} escrow
+ * @returns {Promise<boolean>} true if a notification was sent
+ */
+export async function notifyExpiryOnce(escrow) {
+  const deadline = escrow.deadline ? new Date(escrow.deadline).toISOString() : '';
+  const key = `${escrow.id}:${deadline}`;
+  if (sentExpiryNotifications.has(key)) {
+    log.info({ message: 'expiry_notification_suppressed', escrowId: String(escrow.id) });
+    return false;
+  }
+  await expiryNotifier(escrow);
+  sentExpiryNotifications.add(key);
+  return true;
+}
+
+export function resetExpiryNotifications() {
+  sentExpiryNotifications.clear();
+}
+
 /**
  * Find all Active escrows that have passed their deadline.
  *
@@ -163,6 +198,9 @@ export async function processExpiredEscrows({ batchSize = DEFAULT_BATCH_SIZE, ac
           results.skipped++;
         } else {
           results.succeeded++;
+          await notifyExpiryOnce(escrow).catch((err) =>
+            log.error({ message: 'expiry_notification_failed', escrowId: String(escrow.id), error: err.message }),
+          );
         }
       } catch (err) {
         results.failed++;
@@ -261,6 +299,9 @@ export default {
   findExpiredEscrows,
   expireEscrow,
   processExpiredEscrows,
+  notifyExpiryOnce,
+  setExpiryNotifier,
+  resetExpiryNotifications,
   getExpiryStatus,
   startExpiryJob,
   stopExpiryJob,

@@ -9,6 +9,7 @@ import { logControllerError } from '../../config/logger.js';
 import {
   recordTransaction,
   getMonitorStatus,
+  getMonitorHealth,
   getRecentTransactions,
 } from '../../services/stellarMonitorService.js';
 
@@ -23,6 +24,20 @@ const getStatus = async (req, res) => {
   } catch (err) {
     logControllerError('stellarMonitor.getStatus', err, req);
     res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: err.message } });
+  }
+};
+
+/**
+ * GET /api/v1/stellar-monitor/health
+ * Returns status, lag and last checked time with sensitive account details masked.
+ */
+const getHealth = async (req, res) => {
+  try {
+    const health = await getMonitorHealth();
+    res.json({ data: health });
+  } catch (err) {
+    logControllerError('stellarMonitor.getHealth', err, req);
+    res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Health check failed' } });
   }
 };
 
@@ -70,6 +85,7 @@ const listTransactions = async (req, res) => {
 
 export default {
   getStatus,
+  getHealth,
   trackTransaction,
   listTransactions,
 };

@@ -46,6 +46,7 @@ const createQueue = (name) =>
 export const emailQueue = createQueue('email');
 export const webhookQueue = createQueue('webhook');
 export const scheduledQueue = createQueue('scheduled');
+export const expiryQueue = createQueue('expiry');
 
 // eventQueue is handled separately due to its complex retry/DLQ setup.
 // Import it directly from './eventQueue.js' to avoid starting BullMQ workers

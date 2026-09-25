@@ -227,6 +227,50 @@ export async function getMonitorStatus() {
 }
 
 /**
+ * Mask a Stellar account so only a short prefix/suffix is exposed.
+ */
+export function maskAccount(address) {
+  if (!address || typeof address !== 'string') return null;
+  if (address.length <= 8) return '****';
+  return `${address.slice(0, 4)}…${address.slice(-4)}`;
+}
+
+/**
+ * Get monitor health: status, lag and last checked time.
+ * Never returns tenant secrets or raw transaction payloads.
+ */
+export async function getMonitorHealth() {
+  const [lastChecked, oldestPending] = await Promise.all([
+    prisma.transactionMonitor.findFirst({
+      orderBy: { lastCheckedAt: 'desc' },
+      select: { lastCheckedAt: true },
+    }),
+    prisma.transactionMonitor.findFirst({
+      where: { status: TxStatus.PENDING },
+      orderBy: { createdAt: 'asc' },
+      select: { txHash: true, fromAddress: true, createdAt: true },
+    }),
+  ]);
+
+  const now = Date.now();
+  const lastCheckedAt = lastChecked?.lastCheckedAt ?? null;
+  const lagMs = oldestPending ? now - new Date(oldestPending.createdAt).getTime() : 0;
+
+  let status = 'ok';
+  if (!isRunning) status = 'stopped';
+  else if (lagMs > STUCK_THRESHOLD_MS) status = 'degraded';
+
+  return {
+    status,
+    lagMs,
+    lastCheckedAt: lastCheckedAt ? new Date(lastCheckedAt).toISOString() : null,
+    oldestPending: oldestPending
+      ? { txHash: maskAccount(oldestPending.txHash), fromAddress: maskAccount(oldestPending.fromAddress) }
+      : null,
+  };
+}
+
+/**
  * Get recent transactions with optional status filter.
  */
 export async function getRecentTransactions({ status, page = 1, limit = 20 } = {}) {
@@ -304,6 +348,8 @@ export default {
   checkTransactionStatus,
   pollPendingTransactions,
   getMonitorStatus,
+  getMonitorHealth,
+  maskAccount,
   getRecentTransactions,
   startMonitor,
   stopMonitor,

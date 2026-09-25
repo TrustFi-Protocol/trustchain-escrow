@@ -12,6 +12,7 @@ import adminAuth, { issueAdminToken, ADMIN_TOKEN_TTL } from '../middleware/admin
 import { requireMfa } from '../middleware/mfaAuth.js';
 import adminController from '../controllers/adminController.js';
 import tenantController from '../controllers/tenantController.js';
+import deadLetterController from '../controllers/deadLetterController.js';
 import * as featureFlagController from '../controllers/featureFlagController.js';
 import { getAuditLog, rotateSecrets } from '../../lib/secrets.js';
 import cache from '../../lib/cache.js';
@@ -134,6 +135,10 @@ router.patch('/rate-limits/:tier', requireMfa, adminController.updateRateLimit);
 router.get('/rate-limits/usage/:userId', adminController.getUserRateLimitUsage);
 
 // ── Tenants ───────────────────────────────────────────────────────────────────
+// Dead-letter queues (email, webhook, indexer, expiry)
+router.get('/dead-letters/:queue', deadLetterController.preview);
+router.post('/dead-letters/:queue/replay', deadLetterController.replay);
+
 router.get('/tenants', tenantController.listTenants);
 router.post('/tenants', tenantController.createTenant);
 router.get('/tenants/:tenantId', tenantController.getTenant);

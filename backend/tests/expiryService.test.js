@@ -44,6 +44,9 @@ const {
   findExpiredEscrows,
   expireEscrow,
   processExpiredEscrows,
+  notifyExpiryOnce,
+  setExpiryNotifier,
+  resetExpiryNotifications,
   getExpiryStatus,
   stopExpiryJob,
 } = await import('../services/expiryService.js');
@@ -302,6 +305,50 @@ describe('expiryService', () => {
       expect(status.active).toBe(true);
 
       stopExpiryJob();
+    });
+  });
+
+  describe('expiry notification suppression', () => {
+    const escrow = { id: 7n, clientAddress: 'GCLIENT', deadline: pastDate };
+    let notifier;
+
+    beforeEach(() => {
+      resetExpiryNotifications();
+      notifier = jest.fn(async () => {});
+      setExpiryNotifier(notifier);
+    });
+
+    it('notifies once when the same expiry event is retried', async () => {
+      expect(await notifyExpiryOnce(escrow)).toBe(true);
+      expect(await notifyExpiryOnce(escrow)).toBe(false);
+      expect(notifier).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not notify for already-expired escrows', async () => {
+      prismaMock.escrow.findMany.mockResolvedValue([escrow]);
+      prismaMock.escrow.findUniqueOrThrow.mockResolvedValue({ status: 'Cancelled', deadline: pastDate });
+
+      const results = await processExpiredEscrows({ actor: 'test' });
+
+      expect(results.skipped).toBe(1);
+      expect(notifier).not.toHaveBeenCalled();
+    });
+
+    it('notifies on successful expiry and suppresses on reprocessing', async () => {
+      prismaMock.escrow.findMany.mockResolvedValue([escrow]);
+      prismaMock.escrow.findUniqueOrThrow.mockResolvedValue({ status: 'Active', deadline: pastDate, remainingBalance: '10' });
+      prismaMock.escrow.update.mockResolvedValue({ id: 7n, status: 'Cancelled' });
+
+      await processExpiredEscrows({ actor: 'test' });
+      await processExpiredEscrows({ actor: 'test' });
+
+      expect(notifier).toHaveBeenCalledTimes(1);
+    });
+
+    it('allows a retry when the notifier fails', async () => {
+      notifier.mockRejectedValueOnce(new Error('smtp down'));
+      await expect(notifyExpiryOnce(escrow)).rejects.toThrow('smtp down');
+      expect(await notifyExpiryOnce(escrow)).toBe(true);
     });
   });
 });

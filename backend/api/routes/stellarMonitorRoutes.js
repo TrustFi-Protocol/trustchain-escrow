@@ -5,6 +5,7 @@
  * All routes require authentication.
  *
  * GET  /api/stellar-monitor/status           — monitoring service status
+ * GET  /api/stellar-monitor/health           — health (status, lag, last checked)
  * POST /api/stellar-monitor/transactions      — register a tx for monitoring
  * GET  /api/stellar-monitor/transactions      — list monitored transactions
  */
@@ -21,6 +22,12 @@ router.use(authMiddleware);
  * @desc   Get monitoring service status and transaction counts
  */
 router.get('/status', stellarMonitorController.getStatus);
+
+/**
+ * @route  GET /api/stellar-monitor/health
+ * @desc   Get monitor health with sensitive account details masked
+ */
+router.get('/health', stellarMonitorController.getHealth);
 
 /**
  * @route  POST /api/stellar-monitor/transactions
