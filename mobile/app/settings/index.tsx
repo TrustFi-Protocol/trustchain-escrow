@@ -76,6 +76,15 @@ export default function SettingsScreen() {
           <SettingRow label="Version" value="1.0.0" />
           <SettingRow label="Network" value={network === 'mainnet' ? 'Mainnet' : 'Testnet'} />
         </Card>
+
+        {/* Integrations */}
+        <Text style={styles.section}>Integrations</Text>
+        <Card style={styles.card}>
+          <SettingRow label="Webhooks" value="Desktop only" />
+          <Text style={styles.integrationNote}>
+            Manage webhook endpoints and API integrations from the desktop dashboard.
+          </Text>
+        </Card>
       </ScrollView>
     </SafeAreaView>
   );
@@ -122,4 +131,5 @@ const styles = StyleSheet.create({
   switchLeft: { flex: 1, marginRight: 16 },
   switchLabel: { fontSize: 14, color: '#d1d5db', fontWeight: '500' },
   switchSub: { fontSize: 12, color: '#6b7280', marginTop: 2 },
+  integrationNote: { color: '#9ca3af', fontSize: 12, lineHeight: 18, paddingVertical: 8 },
 });

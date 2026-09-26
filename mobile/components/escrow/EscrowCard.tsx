@@ -5,6 +5,7 @@ import Badge from '../ui/Badge';
 import Card from '../ui/Card';
 import { truncateAddress, stroopsToXlm } from '../../lib/stellar';
 import type { Escrow } from '../../lib/api';
+import { getCacheFreshnessLabel, getEscrowDeadlineState } from '../../lib/escrowFreshness';
 
 interface EscrowCardProps {
   escrow: Escrow;
@@ -20,6 +21,8 @@ export default function EscrowCard({ escrow, userAddress }: EscrowCardProps) {
   const approved = milestones.filter((m) => m.status === 'Approved').length;
   const total = milestones.length;
   const progressPct = total > 0 ? (approved / total) * 100 : 0;
+  const deadlineState = getEscrowDeadlineState(escrow.deadline);
+  const freshnessLabel = getCacheFreshnessLabel((escrow as Escrow & { cachedAt?: string }).cachedAt);
 
   return (
     <TouchableOpacity activeOpacity={0.8} onPress={() => router.push(`/escrow/${escrow.id}`)}>
@@ -64,12 +67,13 @@ export default function EscrowCard({ escrow, userAddress }: EscrowCardProps) {
               {isClient ? 'client' : 'freelancer'}
             </Text>
           </Text>
-          {escrow.deadline && (
-            <Text style={styles.deadline}>
-              Due {new Date(escrow.deadline).toLocaleDateString()}
+          {deadlineState.label && (
+            <Text style={[styles.deadline, deadlineState.isExpired && styles.expired]}>
+              {deadlineState.label}
             </Text>
           )}
         </View>
+        {freshnessLabel && <Text style={styles.staleCache}>{freshnessLabel}</Text>}
       </Card>
     </TouchableOpacity>
   );
@@ -93,4 +97,6 @@ const styles = StyleSheet.create({
   clientRole: { color: '#60a5fa', fontWeight: '600' },
   freelancerRole: { color: '#34d399', fontWeight: '600' },
   deadline: { fontSize: 11, color: '#6b7280' },
+  expired: { color: '#f87171', fontWeight: '700' },
+  staleCache: { color: '#f59e0b', fontSize: 11, marginTop: 8 },
 });

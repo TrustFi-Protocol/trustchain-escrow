@@ -13,11 +13,19 @@ import { useWalletStore } from '../../store/useWalletStore';
 import { kycApi } from '../../lib/api';
 import Button from '../../components/ui/Button';
 
+const KYC_STATUS_COPY: Record<string, string> = {
+  Pending: 'Your verification is pending review.',
+  Approved: 'Your identity has been verified.',
+  Rejected: 'Verification was rejected. Review the provider instructions before retrying.',
+  Expired: 'Verification expired. Refresh your status or restart verification.',
+};
+
 export default function KycScreen() {
   const address = useWalletStore((s) => s.address)!;
   const [token, setToken] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
 
   useEffect(() => {
     void loadKycStatus();
@@ -25,6 +33,7 @@ export default function KycScreen() {
 
   const loadKycStatus = async () => {
     setLoading(true);
+    setRefreshing(true);
     try {
       const { data } = await kycApi.getStatus(address);
       setStatus(data.status ?? 'Pending');
@@ -36,6 +45,7 @@ export default function KycScreen() {
       Alert.alert('Error', 'Failed to load KYC status. Please try again.');
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
   };
 
@@ -54,8 +64,14 @@ export default function KycScreen() {
           <Text style={styles.successIcon}>✅</Text>
           <Text style={styles.successTitle}>KYC Approved</Text>
           <Text style={styles.successText}>
-            Your identity has been verified. You can now use fiat on-ramp features.
+            {KYC_STATUS_COPY.Approved} You can now use fiat on-ramp features.
           </Text>
+          <Button
+            title={refreshing ? 'Refreshing...' : 'Refresh status'}
+            onPress={loadKycStatus}
+            disabled={refreshing}
+            style={styles.retryBtn}
+          />
         </View>
       </SafeAreaView>
     );
@@ -65,7 +81,9 @@ export default function KycScreen() {
     return (
       <SafeAreaView style={styles.safe}>
         <View style={styles.center}>
-          <Text style={styles.errorText}>Could not load KYC widget.</Text>
+          <Text style={styles.errorText}>
+            {KYC_STATUS_COPY[status ?? 'Pending'] ?? 'Could not load KYC widget.'}
+          </Text>
           <Button title="Retry" onPress={loadKycStatus} style={styles.retryBtn} />
         </View>
       </SafeAreaView>
