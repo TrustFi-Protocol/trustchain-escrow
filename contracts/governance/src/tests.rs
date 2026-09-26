@@ -7,7 +7,7 @@ mod tests {
     };
 
     use crate::{
-        FundPayload, GovernanceContract, GovernanceContractClient, ParameterPayload,
+        FundPayload, GovError, GovernanceContract, GovernanceContractClient, ParameterPayload,
         ProposalPayload, ProposalStatus, ProposalType,
     };
 
@@ -1135,5 +1135,136 @@ mod tests {
         // Attempt to re-vote after extending lock should fail
         let result = client.try_cast_vote(&voter, &id, &true);
         assert!(result.is_err(), "Expected AlreadyVoted error");
+    }
+
+    // ── Staking withdrawal cooldown tests ─────────────────────────────────────
+
+    const MIN_STAKE: i128 = 1_000;
+    const WITHDRAW_COOLDOWN: u64 = 604_800; // 7 days in seconds
+
+    #[test]
+    fn test_withdraw_stake_before_cooldown_fails() {
+        let (env, _admin, ta, token, client) = setup();
+        let user = Address::generate(&env);
+        mint(&env, &ta, &token, &user, MIN_STAKE);
+
+        // Stake tokens to become arbitrator
+        client.stake_arbitrator(&user, &MIN_STAKE);
+        assert!(client.is_arbitrator(&user));
+
+        // First call initiates cooldown and returns StakeCooldownActive
+        let res1 = client.try_withdraw_stake(&user);
+        assert_eq!(res1, Err(Ok(GovError::StakeCooldownActive)));
+
+        // Advance time partially, but still before cooldown expires (e.g. 3 days)
+        advance(&env, 259_200);
+
+        // Second call before cooldown expires must still return StakeCooldownActive
+        let res2 = client.try_withdraw_stake(&user);
+        assert_eq!(res2, Err(Ok(GovError::StakeCooldownActive)));
+
+        // User tokens remain locked in contract, user is still arbitrator
+        let user_balance = token::Client::new(&env, &token).balance(&user);
+        assert_eq!(user_balance, 0);
+        assert!(client.is_arbitrator(&user));
+    }
+
+    #[test]
+    fn test_withdraw_stake_exactly_at_cooldown_succeeds() {
+        let (env, _admin, ta, token, client) = setup();
+        let user = Address::generate(&env);
+        mint(&env, &ta, &token, &user, MIN_STAKE);
+
+        client.stake_arbitrator(&user, &MIN_STAKE);
+        assert!(client.is_arbitrator(&user));
+
+        // Initiate cooldown
+        let res = client.try_withdraw_stake(&user);
+        assert_eq!(res, Err(Ok(GovError::StakeCooldownActive)));
+
+        // Advance exactly WITHDRAW_COOLDOWN seconds (now == expires)
+        advance(&env, WITHDRAW_COOLDOWN);
+
+        // Call exactly at cooldown expiry succeeds
+        let withdrawn = client.withdraw_stake(&user);
+        assert_eq!(withdrawn, MIN_STAKE);
+
+        // User stake returned and removed as arbitrator
+        let user_balance = token::Client::new(&env, &token).balance(&user);
+        assert_eq!(user_balance, MIN_STAKE);
+        assert!(!client.is_arbitrator(&user));
+    }
+
+    #[test]
+    fn test_withdraw_stake_after_cooldown_succeeds() {
+        let (env, _admin, ta, token, client) = setup();
+        let user = Address::generate(&env);
+        let stake_amount = 2_500_i128;
+        mint(&env, &ta, &token, &user, stake_amount);
+
+        client.stake_arbitrator(&user, &stake_amount);
+        assert!(client.is_arbitrator(&user));
+
+        // Initiate cooldown
+        let res = client.try_withdraw_stake(&user);
+        assert_eq!(res, Err(Ok(GovError::StakeCooldownActive)));
+
+        // Advance well past cooldown expiry (e.g. 10 days)
+        advance(&env, WITHDRAW_COOLDOWN + 259_200);
+
+        // Call after cooldown succeeds
+        let withdrawn = client.withdraw_stake(&user);
+        assert_eq!(withdrawn, stake_amount);
+
+        let user_balance = token::Client::new(&env, &token).balance(&user);
+        assert_eq!(user_balance, stake_amount);
+        assert!(!client.is_arbitrator(&user));
+    }
+
+    #[test]
+    fn test_restake_during_cooldown_resets_cooldown_and_prevents_bypass() {
+        let (env, _admin, ta, token, client) = setup();
+        let user = Address::generate(&env);
+        let initial_stake = 1_000_i128;
+        let additional_stake = 1_500_i128;
+        mint(&env, &ta, &token, &user, initial_stake + additional_stake);
+
+        // Initial stake
+        client.stake_arbitrator(&user, &initial_stake);
+
+        // Initiate withdrawal cooldown at T0
+        let res = client.try_withdraw_stake(&user);
+        assert_eq!(res, Err(Ok(GovError::StakeCooldownActive)));
+
+        // Advance 5 days (still within initial cooldown)
+        advance(&env, 432_000);
+
+        // Restake during cooldown: adds more tokens and resets the withdrawal cooldown
+        client.stake_arbitrator(&user, &additional_stake);
+        assert_eq!(client.get_arbitrator_stake(&user), initial_stake + additional_stake);
+
+        // Advance past original cooldown expiration timestamp (2 more days, so 7 days total from T0)
+        advance(&env, 172_801);
+
+        // Calling withdraw_stake cannot bypass cooldown: since user restaked,
+        // the old cooldown was cancelled, so this call initiates a fresh cooldown
+        let res_new = client.try_withdraw_stake(&user);
+        assert_eq!(res_new, Err(Ok(GovError::StakeCooldownActive)));
+
+        // Advancing partially into the new cooldown (3 days) still fails
+        advance(&env, 259_200);
+        let res_premature = client.try_withdraw_stake(&user);
+        assert_eq!(res_premature, Err(Ok(GovError::StakeCooldownActive)));
+
+        // Advance remainder of the new cooldown duration (4 more days)
+        advance(&env, WITHDRAW_COOLDOWN - 259_200);
+
+        // Full new cooldown elapsed: successfully withdraws full accumulated stake
+        let total_withdrawn = client.withdraw_stake(&user);
+        assert_eq!(total_withdrawn, initial_stake + additional_stake);
+
+        let user_balance = token::Client::new(&env, &token).balance(&user);
+        assert_eq!(user_balance, initial_stake + additional_stake);
+        assert!(!client.is_arbitrator(&user));
     }
 }

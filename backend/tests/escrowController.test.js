@@ -14,6 +14,8 @@ const cacheMock = {
   invalidate: jest.fn(),
   invalidatePrefix: jest.fn(),
   invalidateTags: jest.fn(),
+  singleFlight: jest.fn(async (_key, loader) => loader()),
+  fetchWithSingleFlight: jest.fn(async (_key, loader) => loader()),
   analytics: jest.fn(() => ({
     hits: 0,
     misses: 0,
@@ -369,6 +371,43 @@ describe('escrowController — cache behaviour', () => {
 
       expect(prismaMock.escrow.findUnique).toHaveBeenCalled();
       expect(res.json).toHaveBeenCalledWith(fixtures.escrows[0]);
+    });
+
+    it('uses single-flight to protect against concurrent cache stampedes', async () => {
+      // Simulate real singleFlight behavior in mock
+      const inFlight = new Map();
+      cacheMock.singleFlight.mockImplementation(async (key, loader) => {
+        if (inFlight.has(key)) return inFlight.get(key);
+        const p = (async () => {
+          try {
+            return await loader();
+          } finally {
+            inFlight.delete(key);
+          }
+        })();
+        inFlight.set(key, p);
+        return p;
+      });
+
+      prismaMock.escrow.findUnique.mockClear();
+      prismaMock.escrow.findUnique.mockImplementation(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        return fixtures.escrows[0];
+      });
+
+      const req1 = { params: { id: '42' } };
+      const res1 = createMockRes();
+      const req2 = { params: { id: '42' } };
+      const res2 = createMockRes();
+
+      await Promise.all([
+        escrowController.getEscrow(req1, res1),
+        escrowController.getEscrow(req2, res2),
+      ]);
+
+      expect(prismaMock.escrow.findUnique).toHaveBeenCalledTimes(1);
+      expect(res1.json).toHaveBeenCalledWith(fixtures.escrows[0]);
+      expect(res2.json).toHaveBeenCalledWith(fixtures.escrows[0]);
     });
   });
 });

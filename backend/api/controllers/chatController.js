@@ -13,6 +13,7 @@
 
 import prisma from '../../lib/prisma.js';
 import { buildPaginatedResponse, parsePagination } from '../../lib/pagination.js';
+import { resyncChatParticipants } from '../../services/chatParticipantResyncService.js';
 
 const MAX_MESSAGES_PER_ROOM = 500;
 
@@ -147,4 +148,25 @@ export const getMessages = async (req, res) => {
   }
 };
 
-export default { distributeRoomKey, getRoomKey, sendMessage, getMessages };
+export const resyncRoomParticipants = async (req, res) => {
+  try {
+    const { escrowId } = req.params;
+    const { removeUnauthorized = true } = req.body || {};
+
+    const escrow = await getEscrowOrFail(escrowId, req.tenantId, req.user.address, res);
+    if (!escrow) return;
+
+    const result = await resyncChatParticipants(escrowId, {
+      tenantId: req.tenantId,
+      removeUnauthorized,
+    });
+
+    return res.json(result);
+  } catch (err) {
+    const status = err.statusCode || 500;
+    return res.status(status).json({ error: err.message });
+  }
+};
+
+export default { distributeRoomKey, getRoomKey, sendMessage, getMessages, resyncRoomParticipants };
+

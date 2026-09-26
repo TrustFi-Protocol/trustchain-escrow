@@ -241,6 +241,74 @@ async function invalidateTags(tags) {
   await Promise.all(tags.map(invalidateTag));
 }
 
+// ── Single-flight stampede protection ─────────────────────────────────────────
+
+const inFlight = new Map();
+
+/**
+ * Coalesces concurrent calls for the same key so only a single loader
+ * invocation is executed. Other callers wait on the in-flight Promise.
+ *
+ * If the loader rejects, the in-flight entry is cleaned up immediately
+ * so subsequent requests can retry without cache poisoning.
+ *
+ * @param {string} key
+ * @param {() => Promise<*>} loader
+ * @returns {Promise<*>}
+ */
+async function singleFlight(key, loader) {
+  const scopedKey = scopeCacheKey(key);
+  if (inFlight.has(scopedKey)) {
+    return inFlight.get(scopedKey);
+  }
+
+  const promise = (async () => {
+    try {
+      return await loader();
+    } finally {
+      inFlight.delete(scopedKey);
+    }
+  })();
+
+  inFlight.set(scopedKey, promise);
+  return promise;
+}
+
+/**
+ * Get from cache or invoke loader with single-flight protection to prevent
+ * cache stampedes on hot keys.
+ *
+ * @param {string} key
+ * @param {() => Promise<*>} loader
+ * @param {number} [ttlSeconds]
+ * @param {string[]} [tags]
+ * @returns {Promise<*>}
+ */
+async function fetchWithSingleFlight(key, loader, ttlSeconds = 60, tags = []) {
+  const cached = await get(key);
+  if (cached !== null) {
+    return cached;
+  }
+
+  return singleFlight(key, async () => {
+    // Re-check cache inside single-flight execution
+    const doubleCheck = await get(key);
+    if (doubleCheck !== null) {
+      return doubleCheck;
+    }
+
+    const value = await loader();
+    if (value !== undefined && value !== null) {
+      if (tags && tags.length > 0) {
+        await setWithTags(key, value, ttlSeconds, tags);
+      } else {
+        await set(key, value, ttlSeconds);
+      }
+    }
+    return value;
+  });
+}
+
 /** Warm the cache by calling a loader function if the key is cold. */
 async function warm(key, loader, ttlSeconds = 60) {
   const existing = await get(key);
@@ -274,6 +342,8 @@ export default {
   flushTenant,
   invalidateTag,
   invalidateTags,
+  singleFlight,
+  fetchWithSingleFlight,
   warm,
   analytics,
   size,

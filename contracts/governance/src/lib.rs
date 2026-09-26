@@ -791,6 +791,12 @@ impl GovernanceContract {
         Storage::bump_persistent(&env, &DataKey::ArbitratorStake(caller.clone()));
         Storage::bump_persistent(&env, &DataKey::Arbitrator(caller.clone()));
 
+        // If there was an active withdrawal cooldown, cancel it on restake so cooldowns cannot be bypassed
+        let cooldown_key = DataKey::WithdrawCooldown(caller.clone());
+        if env.storage().persistent().has(&cooldown_key) {
+            env.storage().persistent().remove(&cooldown_key);
+        }
+
         env.events().publish(
             (soroban_sdk::symbol_short!("arb_stk"), caller.clone()),
             (amount, new_stake),

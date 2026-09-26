@@ -17,6 +17,10 @@
 //!    for the full total, adding one more unit of milestone amount must
 //!    always be rejected — for every partition shape, not just a hand-picked
 //!    example.
+//! 3. **Split escrow cancellation invariants** — covers two-way split,
+//!    multi-party split, partial release before cancellation, and rounding
+//!    residue, ensuring each participant receives only their intended refund
+//!    share and total funds are strictly conserved without residue leakage.
 
 #[cfg(test)]
 #[allow(clippy::module_inception)]
@@ -40,6 +44,7 @@ mod property_invariant_tests {
 
     struct TestEnv {
         env: Env,
+        admin: Address,
         client: EscrowContractClient<'static>,
         token_id: Address,
     }
@@ -55,6 +60,7 @@ mod property_invariant_tests {
         client.initialize(&admin);
         TestEnv {
             env,
+            admin,
             client,
             token_id,
         }
@@ -274,6 +280,318 @@ mod property_invariant_tests {
                 Err(Ok(EscrowError::E15)),
                 "seed {seed}: allocating past total_amount must always be rejected"
             );
+        }
+    }
+
+    // ── Invariant 3: Two-way split escrow cancellation ───────────────────────
+
+    #[test]
+    fn test_invariant_two_way_split_cancellation() {
+        for seed in 200u64..215 {
+            let mut rng = Rng::new(seed);
+            let total = rng.range_i128(2_000, 10_000);
+            let alloc = rng.range_i128(500, total - 500);
+            let unallocated = total - alloc;
+            let split_amount = rng.range_i128(100, unallocated - 100);
+
+            let t = setup();
+            let treasury = Address::generate(&t.env);
+            t.client.set_platform_treasury(&t.admin, &treasury);
+
+            let client_addr = Address::generate(&t.env);
+            let freelancer = Address::generate(&t.env);
+            let rent_buffer = 10_000_000_i128;
+            mint(&t.env, &t.token_id, &client_addr, total + unallocated + rent_buffer);
+
+            let parent_id = t.client.create_escrow(
+                &client_addr,
+                &freelancer,
+                &t.token_id,
+                &total,
+                &hash(&t.env, seed as u32 * 1000),
+                &None,
+                &None,
+                &None,
+                &None,
+                &no_multisig(&t.env),
+                &None,
+            );
+
+            // Allocate `alloc` to a milestone, leaving `unallocated` splittable
+            t.client.add_milestone(
+                &client_addr,
+                &parent_id,
+                &String::from_str(&t.env, "M1"),
+                &hash(&t.env, seed as u32 * 1000 + 1),
+                &alloc,
+            );
+
+            // Execute two-way split
+            let (child1, child2) = t.client.split_escrow(
+                &client_addr,
+                &parent_id,
+                &split_amount,
+                &hash(&t.env, seed as u32 * 1000 + 2),
+            );
+
+            let child1_meta = t.client.get_escrow_meta(&child1);
+            let child2_meta = t.client.get_escrow_meta(&child2);
+            assert_eq!(child1_meta.total_amount, split_amount);
+            assert_eq!(child2_meta.total_amount, unallocated - split_amount);
+
+            let token_client = token::Client::new(&t.env, &t.token_id);
+            let client_bal_before = token_client.balance(&client_addr);
+            let treasury_bal_before = token_client.balance(&treasury);
+
+            // Cancel child 1
+            t.client.cancel_escrow(&client_addr, &child1);
+            let child1_post = t.client.get_escrow(&child1);
+            assert_eq!(child1_post.status, EscrowStatus::Cancelled);
+            assert_eq!(child1_post.remaining_balance, 0);
+
+            // Cancel child 2
+            t.client.cancel_escrow(&client_addr, &child2);
+            let child2_post = t.client.get_escrow(&child2);
+            assert_eq!(child2_post.status, EscrowStatus::Cancelled);
+            assert_eq!(child2_post.remaining_balance, 0);
+
+            let client_refunded = token_client.balance(&client_addr) - client_bal_before;
+            let treasury_fees = token_client.balance(&treasury) - treasury_bal_before;
+
+            // Invariant: client refund + platform fees strictly conserves the split balance
+            assert_eq!(
+                client_refunded + treasury_fees,
+                unallocated,
+                "seed {seed}: two-way split cancellation must conserve all split funds"
+            );
+        }
+    }
+
+    // ── Invariant 4: Multi-party split cancellation ───────────────────────────
+
+    #[test]
+    fn test_invariant_multi_party_split_cancellation() {
+        for seed in 300u64..315 {
+            let mut rng = Rng::new(seed);
+            let total = rng.range_i128(5_000, 15_000);
+            let alloc = rng.range_i128(1_000, 2_000);
+            let unallocated = total - alloc;
+
+            let t = setup();
+            let treasury = Address::generate(&t.env);
+            t.client.set_platform_treasury(&t.admin, &treasury);
+
+            let client_addr = Address::generate(&t.env);
+            let freelancer = Address::generate(&t.env);
+            let rent_buffer = 10_000_000_i128;
+            mint(&t.env, &t.token_id, &client_addr, total * 3 + rent_buffer);
+
+            let parent_id = t.client.create_escrow(
+                &client_addr,
+                &freelancer,
+                &t.token_id,
+                &total,
+                &hash(&t.env, seed as u32 * 1000),
+                &None,
+                &None,
+                &None,
+                &None,
+                &no_multisig(&t.env),
+                &None,
+            );
+
+            t.client.add_milestone(
+                &client_addr,
+                &parent_id,
+                &String::from_str(&t.env, "M_Alloc"),
+                &hash(&t.env, seed as u32 * 1000 + 1),
+                &alloc,
+            );
+
+            // First split: parent unallocated into child1 and child2
+            let split1 = unallocated / 2;
+            let (child1, child2) = t.client.split_escrow(
+                &client_addr,
+                &parent_id,
+                &split1,
+                &hash(&t.env, seed as u32 * 1000 + 2),
+            );
+
+            // Add small milestone in child2 to leave splittable remainder
+            let child2_meta = t.client.get_escrow_meta(&child2);
+            let child2_alloc = 200_i128;
+            t.client.add_milestone(
+                &client_addr,
+                &child2,
+                &String::from_str(&t.env, "M_Child2"),
+                &hash(&t.env, seed as u32 * 1000 + 3),
+                &child2_alloc,
+            );
+
+            // Second split: multi-party hierarchy (child2 split into child3 and child4)
+            let child2_unallocated = child2_meta.total_amount - child2_alloc;
+            let split2 = child2_unallocated / 2;
+            let (child3, child4) = t.client.split_escrow(
+                &client_addr,
+                &child2,
+                &split2,
+                &hash(&t.env, seed as u32 * 1000 + 4),
+            );
+
+            let token_client = token::Client::new(&t.env, &t.token_id);
+            let client_bal_before = token_client.balance(&client_addr);
+            let treasury_bal_before = token_client.balance(&treasury);
+
+            // Cancel all multi-party split child escrows
+            t.client.cancel_escrow(&client_addr, &child1);
+            t.client.cancel_escrow(&client_addr, &child3);
+            t.client.cancel_escrow(&client_addr, &child4);
+
+            for cid in [child1, child3, child4] {
+                let s = t.client.get_escrow(&cid);
+                assert_eq!(s.status, EscrowStatus::Cancelled);
+                assert_eq!(s.remaining_balance, 0);
+            }
+
+            let total_split_sum = split1 + child2_unallocated;
+            let client_refunded = token_client.balance(&client_addr) - client_bal_before;
+            let treasury_fees = token_client.balance(&treasury) - treasury_bal_before;
+
+            assert_eq!(
+                client_refunded + treasury_fees,
+                total_split_sum,
+                "seed {seed}: multi-party split cancellation must strictly conserve split funds"
+            );
+        }
+    }
+
+    // ── Invariant 5: Partial release before cancellation ──────────────────────
+
+    #[test]
+    fn test_invariant_partial_release_before_cancellation() {
+        for seed in 400u64..415 {
+            let mut rng = Rng::new(seed);
+            let n = rng.range_u32(2, 5);
+            let total = rng.range_i128(2_000, 10_000);
+            let amounts = rng.partition(total, n);
+
+            let t = setup();
+            let treasury = Address::generate(&t.env);
+            t.client.set_platform_treasury(&t.admin, &treasury);
+
+            let client_addr = Address::generate(&t.env);
+            let freelancer = Address::generate(&t.env);
+            let rent_reserve = RENT_RESERVE_PER_ENTRY * (2 + i128::from(n));
+            mint(&t.env, &t.token_id, &client_addr, total + rent_reserve);
+
+            let escrow_id = t.client.create_escrow(
+                &client_addr,
+                &freelancer,
+                &t.token_id,
+                &total,
+                &hash(&t.env, seed as u32 * 1000),
+                &None,
+                &None,
+                &None,
+                &None,
+                &no_multisig(&t.env),
+                &None,
+            );
+
+            let mut mids = StdVec::new();
+            for (i, amt) in amounts.iter().enumerate() {
+                let mid = t.client.add_milestone(
+                    &client_addr,
+                    &escrow_id,
+                    &String::from_str(&t.env, "M"),
+                    &hash(&t.env, seed as u32 * 1000 + i as u32 + 1),
+                    amt,
+                );
+                mids.push(mid);
+            }
+
+            // Submit and approve/release the first milestone before cancellation
+            t.client.submit_milestone(&freelancer, &escrow_id, &mids[0]);
+            t.client.approve_milestone(&client_addr, &escrow_id, &mids[0]);
+
+            let token_client = token::Client::new(&t.env, &t.token_id);
+            let freelancer_after_release = token_client.balance(&freelancer);
+            assert_eq!(freelancer_after_release, amounts[0]);
+
+            let client_bal_before_cancel = token_client.balance(&client_addr);
+            let treasury_bal_before_cancel = token_client.balance(&treasury);
+
+            // Cancel escrow with remaining unreleased/unapproved milestones
+            t.client.cancel_escrow(&client_addr, &escrow_id);
+
+            let post_state = t.client.get_escrow(&escrow_id);
+            assert_eq!(post_state.status, EscrowStatus::Cancelled);
+            assert_eq!(post_state.remaining_balance, 0);
+
+            let client_refund = token_client.balance(&client_addr) - client_bal_before_cancel;
+            let treasury_fee = token_client.balance(&treasury) - treasury_bal_before_cancel;
+            let freelancer_total = token_client.balance(&freelancer);
+
+            // Invariant: prior releases + client refund + treasury fee == initial total
+            assert_eq!(
+                freelancer_total + client_refund + treasury_fee,
+                total,
+                "seed {seed}: partial release before cancellation must conserve total funds"
+            );
+        }
+    }
+
+    // ── Invariant 6: Rounding residue strictly conserved ──────────────────────
+
+    #[test]
+    fn test_invariant_cancellation_rounding_residue() {
+        // Test varying totals that produce non-zero integer division remainder with fee tiers
+        let odd_totals: [i128; 7] = [1_001, 1_337, 3_333, 7_777, 9_999, 12_345, 99_999];
+
+        for total in odd_totals {
+            let t = setup();
+            let treasury = Address::generate(&t.env);
+            t.client.set_platform_treasury(&t.admin, &treasury);
+
+            let client_addr = Address::generate(&t.env);
+            let freelancer = Address::generate(&t.env);
+            let rent_reserve = RENT_RESERVE_PER_ENTRY * 2;
+            mint(&t.env, &t.token_id, &client_addr, total + rent_reserve);
+
+            let escrow_id = t.client.create_escrow(
+                &client_addr,
+                &freelancer,
+                &t.token_id,
+                &total,
+                &hash(&t.env, (total % 100_000) as u32),
+                &None,
+                &None,
+                &None,
+                &None,
+                &no_multisig(&t.env),
+                &None,
+            );
+
+            let token_client = token::Client::new(&t.env, &t.token_id);
+            let client_bal_before = token_client.balance(&client_addr);
+            let treasury_bal_before = token_client.balance(&treasury);
+
+            t.client.cancel_escrow(&client_addr, &escrow_id);
+
+            let post_state = t.client.get_escrow(&escrow_id);
+            assert_eq!(post_state.status, EscrowStatus::Cancelled);
+            assert_eq!(post_state.remaining_balance, 0);
+
+            let client_refund = token_client.balance(&client_addr) - client_bal_before;
+            let fee_collected = token_client.balance(&treasury) - treasury_bal_before;
+
+            // Invariant: refund + fee == total, no stroops lost to rounding residue
+            assert_eq!(
+                client_refund + fee_collected,
+                total,
+                "total {total}: client refund + fee must exactly equal total with no rounding residue lost"
+            );
+            assert!(client_refund > 0);
         }
     }
 }

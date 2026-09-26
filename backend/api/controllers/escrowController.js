@@ -140,11 +140,20 @@ const listEscrows = async (req, res) => {
   }
 };
 
-const getEscrow = async (req, res) => {
-  try {
-    const id = BigInt(req.params.id);
-
-    const escrow = await prisma.escrow.findUnique({
+/**
+ * Fetches escrow details from database protected by single-flight coalescing.
+ * Concurrent requests for the same escrow ID on a cache miss share a single
+ * database query rather than stampeding the database.
+ * If the loader fails, the in-flight promise is cleared immediately so
+ * failures do not poison future requests or cache.
+ *
+ * @param {bigint} id
+ * @returns {Promise<object|null>}
+ */
+export async function fetchEscrowDetails(id) {
+  const flightKey = `flight:escrow:${id.toString()}`;
+  const loader = async () => {
+    return prisma.escrow.findUnique({
       where: { id },
       include: {
         milestones: {
@@ -174,6 +183,18 @@ const getEscrow = async (req, res) => {
         },
       },
     });
+  };
+
+  if (typeof cache.singleFlight === 'function') {
+    return cache.singleFlight(flightKey, loader);
+  }
+  return loader();
+}
+
+const getEscrow = async (req, res) => {
+  try {
+    const id = BigInt(req.params.id);
+    const escrow = await fetchEscrowDetails(id);
 
     if (!escrow) return res.status(404).json({ error: 'Escrow not found' });
     res.json(escrow);
@@ -529,6 +550,7 @@ export default {
   getSuccessRate,
   invalidateStatsCaches,
   searchEscrowsV1,
+  fetchEscrowDetails,
 };
 
 // ── Validation rule sets (used by escrowRoutes) ───────────────────────────────
