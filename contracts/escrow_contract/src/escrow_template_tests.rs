@@ -63,7 +63,7 @@ mod escrow_template_tests {
 
     #[test]
     fn test_create_escrow_from_template() {
-        let (env, admin, _, client) = setup();
+        let (env, admin, contract_id, client) = setup();
         let creator = Address::generate(&env);
         let escrow_client = Address::generate(&env);
         let freelancer = Address::generate(&env);
@@ -105,6 +105,7 @@ mod escrow_template_tests {
         assert_eq!(meta.total_amount, total_amount);
         assert_eq!(meta.allocated_amount, 700);
         assert_eq!(meta.milestone_count, 2);
+        assert!(soroban_sdk::token::Client::new(&env, &token).balance(&contract_id) >= total_amount);
 
         // Check milestones
         let milestone0 = client.get_milestone(&escrow_id, &0);
@@ -114,6 +115,106 @@ mod escrow_template_tests {
         let milestone1 = client.get_milestone(&escrow_id, &1);
         assert_eq!(milestone1.title, String::from_str(&env, "Phase 2"));
         assert_eq!(milestone1.amount, 400);
+
+        client.submit_milestone(&freelancer, &escrow_id, &0);
+        client.approve_milestone(&escrow_client, &escrow_id, &0);
+        assert_eq!(
+            client.get_milestone(&escrow_id, &0).status,
+            crate::MS_RELEASED
+        );
+
+        client.submit_milestone(&freelancer, &escrow_id, &1);
+        client.approve_milestone(&escrow_client, &escrow_id, &1);
+
+        let token_client = soroban_sdk::token::Client::new(&env, &token);
+        assert_eq!(token_client.balance(&freelancer), total_amount);
+        assert_eq!(client.get_milestone(&escrow_id, &1).status, crate::MS_RELEASED);
+        let completed_meta = client.get_escrow_meta(&escrow_id);
+        assert_eq!(completed_meta.remaining_balance, 0);
+        assert_eq!(completed_meta.released_count, 2);
+    }
+
+    #[test]
+    fn test_template_cannot_allocate_more_than_escrow_funding() {
+        let (env, admin, contract_id, client) = setup();
+        let escrow_client = Address::generate(&env);
+        let freelancer = Address::generate(&env);
+        let token = register_token(&env, &admin, &escrow_client, 1_001_000);
+        let token_client = soroban_sdk::token::Client::new(&env, &token);
+
+        let mut milestones = soroban_sdk::Vec::new(&env);
+        milestones.push_back(MilestoneTemplate {
+            title: String::from_str(&env, "Phase 1"),
+            description_hash: BytesN::from_array(&env, &[1u8; 32]),
+            amount: 300,
+        });
+        milestones.push_back(MilestoneTemplate {
+            title: String::from_str(&env, "Phase 2"),
+            description_hash: BytesN::from_array(&env, &[2u8; 32]),
+            amount: 401,
+        });
+        let template_id = client.create_template(
+            &escrow_client,
+            &String::from_str(&env, "Over-allocated Template"),
+            &milestones,
+        );
+
+        let client_balance_before = token_client.balance(&escrow_client);
+        let contract_balance_before = token_client.balance(&contract_id);
+        let result = client.try_create_escrow_from_template(
+            &escrow_client,
+            &template_id,
+            &escrow_client,
+            &freelancer,
+            &token,
+            &700,
+            &BytesN::from_array(&env, &[9u8; 32]),
+            &None::<Address>,
+            &None::<u64>,
+        );
+
+        assert_eq!(result.err().unwrap(), Ok(EscrowError::E15));
+        assert_eq!(token_client.balance(&escrow_client), client_balance_before);
+        assert_eq!(token_client.balance(&contract_id), contract_balance_before);
+    }
+
+    #[test]
+    fn test_zero_value_template_milestone_is_rejected_without_funding() {
+        let (env, admin, contract_id, client) = setup();
+        let escrow_client = Address::generate(&env);
+        let freelancer = Address::generate(&env);
+        let token = register_token(&env, &admin, &escrow_client, 1_001_000);
+        let token_client = soroban_sdk::token::Client::new(&env, &token);
+
+        let mut milestones = soroban_sdk::Vec::new(&env);
+        milestones.push_back(MilestoneTemplate {
+            title: String::from_str(&env, "Zero-value Phase"),
+            description_hash: BytesN::from_array(&env, &[1u8; 32]),
+            amount: 0,
+        });
+        let template_id = client.create_template(
+            &escrow_client,
+            &String::from_str(&env, "Invalid Template"),
+            &milestones,
+        );
+
+        let client_balance_before = token_client.balance(&escrow_client);
+        let contract_balance_before = token_client.balance(&contract_id);
+        let result = client.try_create_escrow_from_template(
+            &escrow_client,
+            &template_id,
+            &escrow_client,
+            &freelancer,
+            &token,
+            &700,
+            &BytesN::from_array(&env, &[9u8; 32]),
+            &None::<Address>,
+            &None::<u64>,
+        );
+
+        assert_eq!(result.err().unwrap(), Ok(EscrowError::E17));
+        assert_eq!(token_client.balance(&escrow_client), client_balance_before);
+        assert_eq!(token_client.balance(&contract_id), contract_balance_before);
     }
 
     #[test]
