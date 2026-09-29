@@ -504,6 +504,7 @@ model WebhookDelivery {
   id             String    @id @default(cuid())
   subscriptionId String    @map("subscription_id")
   eventType      String    @map("event_type")
+  eventKey       String?   @map("event_key")
   payload        Json
   status         String    @default("pending")
   attempts       Int       @default(0)
@@ -514,6 +515,7 @@ model WebhookDelivery {
 
   subscription WebhookSubscription @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
 
+  @@unique([subscriptionId, eventKey])
   @@index([subscriptionId])
   @@index([eventType])
   @@map("webhook_deliveries")

@@ -1,14 +1,10 @@
 'use client';
 
-/**
- * Admin — Platform Settings Page
- *
- * Reads and updates platform configuration (fee %, network, etc.).
- */
-
 import { useState, useEffect } from 'react';
 import { useAdminStore } from '../../../store/app-store';
 import { adminFetch } from '../../../store/admin';
+
+const FRONTEND_NETWORK = (process.env.NEXT_PUBLIC_STELLAR_NETWORK || 'testnet').toLowerCase();
 
 export default function AdminSettingsPage() {
   const { apiKey } = useAdminStore();
@@ -18,6 +14,7 @@ export default function AdminSettingsPage() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [toast, setToast] = useState('');
+
   const fetchSettings = async () => {
     setLoading(true);
     setError('');
@@ -58,6 +55,10 @@ export default function AdminSettingsPage() {
     }
   };
 
+  const runtimeNetwork = settings?.stellarNetwork?.toLowerCase();
+  const networkMismatch =
+    Boolean(runtimeNetwork) && runtimeNetwork !== FRONTEND_NETWORK;
+
   return (
     <div>
       {toast && (
@@ -92,7 +93,19 @@ export default function AdminSettingsPage() {
       ) : (
         settings && (
           <div className="flex flex-col gap-4 max-w-xl">
-            {/* Read-only info */}
+            {networkMismatch && (
+              <div
+                role="alert"
+                className="bg-amber-900/20 border border-amber-500/30 text-amber-200 text-sm rounded-lg px-4 py-3"
+              >
+                <div className="font-semibold">Frontend network configuration is stale.</div>
+                <div className="mt-1">
+                  Expected network: <strong>{FRONTEND_NETWORK}</strong>. Backend runtime network:{' '}
+                  <strong>{runtimeNetwork}</strong>.
+                </div>
+              </div>
+            )}
+
             <div className="card">
               <h2 className="text-sm font-semibold text-gray-300 uppercase tracking-wider mb-3">
                 Environment
@@ -105,7 +118,6 @@ export default function AdminSettingsPage() {
               </dl>
             </div>
 
-            {/* Editable fee */}
             <div className="card">
               <h2 className="text-sm font-semibold text-gray-300 uppercase tracking-wider mb-3">
                 Fee Configuration

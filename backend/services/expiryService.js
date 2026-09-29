@@ -15,6 +15,7 @@
 import prisma from '../lib/prisma.js';
 import { withTransaction } from '../lib/transaction.js';
 import { createModuleLogger } from '../config/logger.js';
+import { enqueuePreferenceAwareNotification } from './notificationPreferenceService.js';
 
 const log = createModuleLogger('expiryService');
 
@@ -189,6 +190,22 @@ export async function processExpiredEscrows({
           results.skipped++;
         } else {
           results.succeeded++;
+          await enqueuePreferenceAwareNotification({
+            eventKey: 'escrow_expired',
+            addresses: [escrow.clientAddress, escrow.freelancerAddress],
+            payload: {
+              escrowId: String(escrow.id),
+              previousStatus: 'Active',
+              status: 'Cancelled',
+              dashboardUrl: `${process.env.EMAIL_BASE_URL || 'http://localhost:4000'}/escrows/${escrow.id}`,
+            },
+          }).catch((notificationError) => {
+            log.warn({
+              message: 'expiry_notification_failed',
+              escrowId: String(escrow.id),
+              error: notificationError.message,
+            });
+          });
         }
       } catch (err) {
         results.failed++;

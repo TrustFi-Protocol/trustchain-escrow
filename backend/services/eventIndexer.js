@@ -419,6 +419,7 @@ const dispatchEvent = async (rawEvent) => {
       data: rawEvent.value,
       txHash: meta.txHash,
       eventIndex: meta.eventIndex,
+      eventKey: `${meta.contractId}:${meta.txHash}:${meta.eventIndex}`,
     };
 
     webhookService.queueEventWebhooks(eventType, webhookPayload).catch((err) => {

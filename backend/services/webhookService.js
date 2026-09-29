@@ -107,15 +107,22 @@ async function getDeliveryHistory({ subscriptionId, createdBy, page = 1, limit =
   };
 }
 
-async function queueSubscriptionWebhook(subscription, payload, eventType) {
-  const delivery = await prisma.webhookDelivery.create({
-    data: {
-      subscription: { connect: { id: subscription.id } },
-      eventType,
-      payload: payload,
-      status: 'pending',
-    },
-  });
+async function queueSubscriptionWebhook(subscription, payload, eventType, eventKey = null) {
+  let delivery;
+  try {
+    delivery = await prisma.webhookDelivery.create({
+      data: {
+        subscription: { connect: { id: subscription.id } },
+        eventType,
+        eventKey,
+        payload: payload,
+        status: 'pending',
+      },
+    });
+  } catch (error) {
+    if (eventKey && error?.code === 'P2002') return null;
+    throw error;
+  }
 
   const signedPayload = buildWebhookPayload(eventType, payload, delivery.id);
   const signature = signPayload(subscription.secret, signedPayload);
@@ -151,9 +158,16 @@ async function queueEventWebhooks(eventType, payload) {
     return { queued: 0 };
   }
 
+  const eventKey =
+    payload?.eventKey ||
+    (payload?.contractId && payload?.txHash && payload?.eventIndex !== undefined
+      ? `${payload.contractId}:${payload.txHash}:${payload.eventIndex}`
+      : null);
+
   const queued = [];
   for (const subscription of subscriptions) {
-    const delivery = await queueSubscriptionWebhook(subscription, payload, eventType);
+    const delivery = await queueSubscriptionWebhook(subscription, payload, eventType, eventKey);
+    if (!delivery) continue;
     queued.push({ subscriptionId: subscription.id, deliveryId: delivery.id });
   }
 

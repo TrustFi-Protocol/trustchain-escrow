@@ -16,6 +16,7 @@
 import prisma from '../lib/prisma.js';
 import { createModuleLogger } from '../config/logger.js';
 import { getLatestLedger } from './stellarService.js';
+import { enqueuePreferenceAwareNotification } from './notificationPreferenceService.js';
 
 const log = createModuleLogger('stellarMonitor');
 
@@ -222,6 +223,24 @@ export async function pollPendingTransactions({ batchSize = BATCH_SIZE } = {}) {
         results.failed++;
         if (nextStatus === TxStatus.REVIEW_REQUIRED) results.reviewRequired++;
         log.warn({ message: 'tx_failed', txHash: tx.txHash, resultCode: txResult.resultCode, status: nextStatus });
+        await enqueuePreferenceAwareNotification({
+          eventKey: 'transaction_failed',
+          addresses: [tx.fromAddress, tx.toAddress],
+          payload: {
+            escrowId: tx.escrowId || tx.txHash,
+            previousStatus: 'Transaction Pending',
+            status: 'Transaction Failed',
+            dashboardUrl: tx.escrowId
+              ? `${process.env.EMAIL_BASE_URL || 'http://localhost:4000'}/escrows/${tx.escrowId}`
+              : `${process.env.EMAIL_BASE_URL || 'http://localhost:4000'}`,
+          },
+        }).catch((notificationError) => {
+          log.warn({
+            message: 'transaction_failure_notification_failed',
+            txHash: tx.txHash,
+            error: notificationError.message,
+          });
+        });
       } else if (nextStatus === TxStatus.TIMEOUT) {
         await prisma.transactionMonitor.update({
           where: { txHash: tx.txHash },
