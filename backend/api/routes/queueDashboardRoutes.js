@@ -19,6 +19,26 @@ import {
 const router = express.Router();
 
 /**
+ * Age in ms of the oldest job still waiting in `jobs`, or `null` when the queue
+ * has nothing waiting.
+ *
+ * Reported per queue and as a top-level worst case so an operator can tell an
+ * idle queue from one with a fresh backlog, and so a stuck backlog is visible
+ * without inspecting each queue separately. BullMQ stamps every job with a
+ * `timestamp` on creation; jobs without one are treated as brand new rather than
+ * being allowed to skew the result into the distant past.
+ */
+function oldestWaitingAgeMs(jobs) {
+  if (!Array.isArray(jobs) || jobs.length === 0) return null;
+  let oldest = Infinity;
+  for (const job of jobs) {
+    const ts = typeof job?.timestamp === 'number' ? job.timestamp : Date.now();
+    if (ts < oldest) oldest = ts;
+  }
+  return Math.max(0, Date.now() - oldest);
+}
+
+/**
  * Get comprehensive queue statistics
  */
 router.get('/stats', async (req, res) => {
@@ -45,6 +65,12 @@ router.get('/stats', async (req, res) => {
       connection.info(),
     ]);
 
+    const mainOldestWaitingAgeMs = oldestWaitingAgeMs(mainQueueWaiting);
+    const deadLetterOldestWaitingAgeMs = oldestWaitingAgeMs(deadLetterWaiting);
+    const waitingAges = [mainOldestWaitingAgeMs, deadLetterOldestWaitingAgeMs].filter(
+      (age) => typeof age === 'number',
+    );
+
     const stats = {
       timestamp: new Date().toISOString(),
       uptime: process.uptime(),
@@ -58,10 +84,14 @@ router.get('/stats', async (req, res) => {
         successRate: queueMetrics.getSuccessRate(),
         processingTime: queueMetrics.getProcessingTime(),
       },
+      // Worst-case backlog age across both queues: the single number a health
+      // card needs. `null` when nothing is waiting anywhere.
+      oldestJobAgeMs: waitingAges.length ? Math.max(...waitingAges) : null,
       mainQueue: {
         ...mainQueueCounts,
         waitingJobs: mainQueueWaiting.length,
         activeJobs: mainQueueActive.length,
+        oldestWaitingJobAgeMs: mainOldestWaitingAgeMs,
         recentCompleted: mainQueueCompleted.slice(-10),
         recentFailed: mainQueueFailed.slice(-10),
       },
@@ -69,6 +99,7 @@ router.get('/stats', async (req, res) => {
         ...deadLetterCounts,
         waitingJobs: deadLetterWaiting.length,
         activeJobs: deadLetterActive.length,
+        oldestWaitingJobAgeMs: deadLetterOldestWaitingAgeMs,
       },
       redis: {
         connected: connection.status === 'ready',
