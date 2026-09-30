@@ -30,6 +30,7 @@ import { buildAdminHeaders } from '../../store/admin';
 import MetricCard from '../../components/admin/MetricCard';
 import EscrowStatusChart from '../../components/admin/EscrowStatusChart';
 import DisputeResolutionChart from '../../components/admin/DisputeResolutionChart';
+import QueueHealthCard from '../../components/admin/QueueHealthCard';
 import {
   deriveMetrics,
   formatCount,
@@ -347,6 +348,18 @@ export default function AdminDashboard() {
               </div>
             </section>
           )}
+
+          {/* Queue health is its own fetch with its own failure state, so it
+              renders even when the platform stats above failed to load. */}
+          <section aria-labelledby="queue-health-heading" className="mb-8">
+            <h2
+              id="queue-health-heading"
+              className="mb-3 text-lg font-semibold text-gray-900 dark:text-gray-50"
+            >
+              Background processing
+            </h2>
+            <QueueHealthCard />
+          </section>
 
           <nav aria-labelledby="admin-sections-heading">
             <h2

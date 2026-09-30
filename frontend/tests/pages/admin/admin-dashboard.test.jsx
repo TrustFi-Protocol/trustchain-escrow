@@ -46,8 +46,52 @@ function authenticate(apiKey = 'test-key') {
   localStorageMock.setItem(APP_STORAGE_KEY, JSON.stringify({ admin: { apiKey } }));
 }
 
+const QUEUE_STATS = {
+  timestamp: '2026-09-29T12:00:00.000Z',
+  oldestJobAgeMs: 60_000,
+  metrics: { totalJobs: 10, failedJobs: 0, deadLetterCount: 0 },
+  mainQueue: { waitingJobs: 0, activeJobs: 1, failed: 0, oldestWaitingJobAgeMs: null },
+  deadLetterQueue: { waitingJobs: 0, activeJobs: 0 },
+};
+
+// The dashboard now issues two independent requests — platform stats and, from
+// the queue health card, queue stats. A single queued response would be consumed
+// by whichever caller asked first, so the mock routes by URL instead. Calling
+// `mockStats` again mid-test changes what the *next* platform request returns.
+let currentStats = STATS;
+let currentStatsFails = false;
+
+function routeFetch() {
+  global.fetch.mockImplementation((url) => {
+    if (String(url).includes('/admin/queues/stats')) {
+      return Promise.resolve({ ok: true, json: async () => QUEUE_STATS });
+    }
+    if (String(url).includes('/api/admin/stats')) {
+      if (currentStatsFails) {
+        return Promise.resolve({ ok: false, json: async () => ({ error: 'Unauthorized' }) });
+      }
+      return Promise.resolve({ ok: true, json: async () => currentStats });
+    }
+    return Promise.resolve({ ok: true, json: async () => ({}) });
+  });
+}
+
 function mockStats(stats = STATS) {
-  global.fetch.mockResolvedValueOnce({ ok: true, json: async () => stats });
+  currentStats = stats;
+  currentStatsFails = false;
+  routeFetch();
+}
+
+function mockStatsFailure() {
+  currentStatsFails = true;
+  routeFetch();
+}
+
+/** Count only platform-stats requests, so the queue card's own call is ignored. */
+function platformStatsCalls() {
+  return global.fetch.mock.calls.filter(([url]) =>
+    String(url).includes('/api/admin/stats'),
+  ).length;
 }
 
 describe('AdminDashboard', () => {
@@ -157,7 +201,11 @@ describe('AdminDashboard', () => {
       mockStats();
       renderWithStore(<AdminDashboard />);
 
-      const status = await screen.findByRole('status');
+      // The queue health card has its own polite status region, so pick the one
+      // carrying the platform figures rather than assuming a single region.
+      const statuses = await screen.findAllByRole('status');
+      const status = statuses.find((el) => /escrows/.test(el.textContent));
+      expect(status).toBeDefined();
       expect(status).toHaveAttribute('aria-live', 'polite');
       await waitFor(() =>
         expect(status).toHaveTextContent('20 escrows, 33 users, 1 open disputes'),
@@ -192,12 +240,12 @@ describe('AdminDashboard', () => {
       renderWithStore(<AdminDashboard />);
 
       const refresh = await screen.findByRole('button', { name: 'Refresh' });
-      expect(global.fetch).toHaveBeenCalledTimes(1);
+      expect(platformStatsCalls()).toBe(1);
 
       mockStats({ ...STATS, escrows: { ...STATS.escrows, total: 21 } });
       await user.click(refresh);
 
-      await waitFor(() => expect(global.fetch).toHaveBeenCalledTimes(2));
+      await waitFor(() => expect(platformStatsCalls()).toBe(2));
       const section = screen.getByRole('region', { name: 'Platform metrics' });
       await waitFor(() => expect(within(section).getByText('21')).toBeInTheDocument());
     });
@@ -211,20 +259,14 @@ describe('AdminDashboard', () => {
   describe('errors', () => {
     it('shows error when fetch fails', async () => {
       authenticate('bad-key');
-      global.fetch.mockResolvedValueOnce({
-        ok: false,
-        json: async () => ({ error: 'Unauthorized' }),
-      });
+      mockStatsFailure();
       renderWithStore(<AdminDashboard />);
       expect(await screen.findByText(/Unauthorized/)).toBeInTheDocument();
     });
 
     it('reports the failure through an alert so it is announced', async () => {
       authenticate('bad-key');
-      global.fetch.mockResolvedValueOnce({
-        ok: false,
-        json: async () => ({ error: 'Unauthorized' }),
-      });
+      mockStatsFailure();
       renderWithStore(<AdminDashboard />);
       expect(await screen.findByRole('alert')).toHaveTextContent('Unauthorized');
     });
