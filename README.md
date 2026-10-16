@@ -350,3 +350,6 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for local setup, the Soroban toolchain, h
 
 <!-- handsoff-issue-333 -->
 - #333: Add fuzz coverage for bridge settlement confirmation
+
+<!-- handsoff-issue-334 -->
+- #334: Add storage-growth benchmark for insurance reserve solvency
