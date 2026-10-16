@@ -18,3 +18,39 @@ soroban-sdk = { version = "21.0.0", features = ["testutils"] }
 [[bench]]
 name = "storage_growth"
 harness = false
+
+# ---------------------------------------------------------------------------
+# Ledger constraints for bridge settlement confirmation (issue #332)
+#
+# These are the documented assumptions the bridge settlement confirmation path
+# in `src/lib.rs` relies on. They are recorded here, beside the implementation,
+# so reviewers and operators can verify them against the target network.
+#
+# TTL assumptions
+#   - Persistent entries written during settlement confirmation (settlement
+#     records, confirmation flags) are extended to `SETTLEMENT_TTL_LEDGERS`
+#     ledgers on every write. At ~5s per ledger this is ~30 days, which is
+#     longer than the bridge's max confirmation window.
+#   - Temporary entries (in-flight confirmation markers) use a short TTL and
+#     are expected to expire naturally once a settlement is finalized.
+#
+# Transaction-size assumptions
+#   - A single settlement confirmation carries one bridge tx hash (32 bytes)
+#     plus a small amount of metadata, keeping the invocation well under the
+#     network's per-transaction size limit. Batch confirmation is intentionally
+#     not supported on this path.
+#
+# Fee assumptions
+#   - The protocol fee is computed from the escrow amount and the configured
+#     basis points at confirmation time. Fee math uses integer arithmetic and
+#     rounds down, so the fee is deterministic and never exceeds the amount.
+#   - Callers must supply sufficient resource fees; the contract does not
+#     subsidize confirmation.
+#
+# Ledger-time assumptions
+#   - Confirmation compares the current ledger timestamp against the escrow's
+#     expiry. The comparison is inclusive of the expiry boundary: a settlement
+#     at exactly the expiry timestamp is rejected as expired.
+#   - Ledger time is treated as monotonically increasing; the contract does not
+#     attempt to correct for clock skew.
+# ---------------------------------------------------------------------------
