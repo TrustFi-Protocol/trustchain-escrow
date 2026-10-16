@@ -345,3 +345,17 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for local setup, the Soroban toolchain, h
 ## License
 
 [MIT](LICENSE)
+
+## Handsoff notes
+
+<!-- handsoff-issue-333 -->
+- #333: Add fuzz coverage for bridge settlement confirmation
+
+<!-- handsoff-issue-334 -->
+- #334: Add storage-growth benchmark for insurance reserve solvency
+
+<!-- handsoff-issue-335 -->
+- #335: Document ledger constraints for insurance reserve solvency
+
+<!-- handsoff-issue-336 -->
+- #336: Add fuzz coverage for insurance reserve solvency
