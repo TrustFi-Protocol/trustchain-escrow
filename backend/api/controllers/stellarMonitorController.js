@@ -14,6 +14,37 @@ import {
 } from '../../services/stellarMonitorService.js';
 
 /**
+ * Shared validator for Stellar transaction hashes.
+ *
+ * A Stellar transaction hash is a 32-byte value rendered as 64 lowercase
+ * hexadecimal characters. Uppercase input is accepted and normalized to
+ * lowercase so callers can compare hashes consistently.
+ *
+ * @param {unknown} value - candidate transaction hash
+ * @returns {{ valid: boolean, normalized: string|null, error: string|null }}
+ */
+export const validateStellarTxHash = (value) => {
+  if (value === null || value === undefined || value === '') {
+    return { valid: false, normalized: null, error: 'txHash is required' };
+  }
+  if (typeof value !== 'string') {
+    return { valid: false, normalized: null, error: 'txHash must be a string' };
+  }
+  const trimmed = value.trim();
+  if (trimmed === '') {
+    return { valid: false, normalized: null, error: 'txHash is required' };
+  }
+  if (!/^[0-9a-fA-F]{64}$/.test(trimmed)) {
+    return {
+      valid: false,
+      normalized: null,
+      error: 'txHash must be a 64-character hexadecimal string',
+    };
+  }
+  return { valid: true, normalized: trimmed.toLowerCase(), error: null };
+};
+
+/**
  * In-memory SLA metrics for webhook delivery latency.
  *
  * Tracks the time from source event ingestion to webhook delivery success,
@@ -123,9 +154,10 @@ const trackTransaction = async (req, res) => {
   try {
     const { txHash, fromAddress, toAddress, amount, memo, escrowId } = req.body;
 
-    if (!txHash || typeof txHash !== 'string') {
+    const hashCheck = validateStellarTxHash(txHash);
+    if (!hashCheck.valid) {
       return res.status(400).json({
-        error: { code: 'VALIDATION_ERROR', message: 'txHash is required' },
+        error: { code: 'VALIDATION_ERROR', message: hashCheck.error },
       });
     }
     if (!fromAddress || typeof fromAddress !== 'string') {
@@ -134,7 +166,14 @@ const trackTransaction = async (req, res) => {
       });
     }
 
-    const record = await recordTransaction({ txHash, fromAddress, toAddress, amount, memo, escrowId });
+    const record = await recordTransaction({
+      txHash: hashCheck.normalized,
+      fromAddress,
+      toAddress,
+      amount,
+      memo,
+      escrowId,
+    });
     res.status(201).json({ data: record });
   } catch (err) {
     logControllerError('stellarMonitor.trackTransaction', err, req);
