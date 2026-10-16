@@ -4,6 +4,7 @@ import kycService from '../../services/kycService.js';
 import { getAuthenticatedWalletAddress } from '../middleware/authorization.js';
 
 const STELLAR_ADDRESS_RE = /^G[A-Z2-7]{55}$/;
+const STELLAR_TX_HASH_RE = /^[0-9a-f]{64}$/i;
 
 function requireOwnedWallet(req, res) {
   const walletAddress = getAuthenticatedWalletAddress(req);
@@ -13,6 +14,16 @@ function requireOwnedWallet(req, res) {
   }
 
   return walletAddress;
+}
+
+/**
+ * Shared validator for Stellar transaction hashes.
+ * A Stellar transaction hash is a 64-character hex string (32 bytes).
+ * Accepts both uppercase and lowercase hex; rejects empty, wrong-length,
+ * and non-hex inputs.
+ */
+export function isValidStellarTxHash(hash) {
+  return typeof hash === 'string' && STELLAR_TX_HASH_RE.test(hash);
 }
 
 /** POST /api/payments/checkout — create a Stripe checkout session. */
