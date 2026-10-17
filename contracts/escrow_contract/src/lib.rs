@@ -5362,6 +5362,21 @@ impl EscrowContract {
         )
     }
 
+    /// Checked token-status query for callers that require an initialized
+    /// contract. Returns the stable `E2` initialization error instead of an
+    /// ambiguous default tuple.
+    ///
+    /// This read performs no persistent writes, emits no events, and depends
+    /// only on instance storage. Its result is valid for the current ledger;
+    /// callers should refresh after any whitelist or pause transaction.
+    pub fn get_token_status_checked(
+        env: Env,
+        token: Address,
+    ) -> Result<(bool, bool, bool), EscrowError> {
+        ContractStorage::require_initialized(&env)?;
+        Ok(Self::get_token_status(env, token))
+    }
+
     /// Returns the current admin address.
     /// Returns EscrowError::E2 if the contract has not been initialized.
     /// Contract entry point: `get_admin`.
@@ -9306,5 +9321,36 @@ mod tests {
 
         let result = client.try_oracle_resolve_dispute(&escrow_id, &payload, &grace);
         assert!(matches!(result, Err(Ok(EscrowError::E57))));
+    }
+
+    #[test]
+    fn checked_token_status_maps_uninitialized_contract_to_e2() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, EscrowContract);
+        let client = EscrowContractClient::new(&env, &contract_id);
+        let token = Address::generate(&env);
+        assert_eq!(client.try_get_token_status_checked(&token), Err(Ok(EscrowError::E2)));
+    }
+
+    #[test]
+    fn token_status_boundary_inputs_preserve_invariants() {
+        let (env, admin, _, client) = setup();
+        client.initialize(&admin);
+        client.set_token_whitelist_enabled(&admin, &true);
+        for _ in 0..64 {
+            let token = Address::generate(&env);
+            let status = client.get_token_status_checked(&token);
+            assert_eq!(status, (false, true, false));
+        }
+    }
+
+    #[test]
+    fn token_status_reads_do_not_grow_event_storage() {
+        let (env, admin, _, client) = setup();
+        client.initialize(&admin);
+        let token = Address::generate(&env);
+        let before = env.events().all().len();
+        for _ in 0..128 { let _ = client.get_token_status_checked(&token); }
+        assert_eq!(env.events().all().len(), before);
     }
 }
