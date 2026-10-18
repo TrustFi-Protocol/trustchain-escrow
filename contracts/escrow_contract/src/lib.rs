@@ -1592,7 +1592,10 @@ impl EscrowContract {
             updated_at: env.ledger().timestamp(),
         };
         bridge::record_bridge_confirmation(&env, &conf);
-        bridge::emit_bridge_confirmation_updated(&env, &token, confirmations, is_finalized);
+        // The event is a complete, version-stable projection of the persisted
+        // confirmation record so an indexer can rebuild bridge finality without
+        // making a follow-up storage query.
+        bridge::emit_bridge_confirmation_updated(&env, &conf);
         Ok(())
     }
 

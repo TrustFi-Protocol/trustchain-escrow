@@ -69,4 +69,8 @@ pub enum InsuranceError {
     // ── Arithmetic ────────────────────────────────────────────────────────────
     /// A checked arithmetic operation (add/mul) overflowed.
     ArithmeticOverflow = 28,
+
+    // ── Reserve solvency ─────────────────────────────────────────────────────
+    /// The insurance reserve cannot cover an approved claim payout.
+    ReserveInsufficient = 29,
 }

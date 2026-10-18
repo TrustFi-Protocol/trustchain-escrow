@@ -257,10 +257,17 @@ mod bridge_tests {
                     && Address::try_from_val(&env, &topics.get(1).unwrap()).unwrap() == token_addr
             })
             .expect("expected brg_cnf event for 14 confirmations");
-        let (emitted_confirmations, emitted_is_finalized): (u32, bool) =
+        let (
+            emitted_bridge,
+            emitted_confirmations,
+            emitted_is_finalized,
+            emitted_updated_at,
+        ): (BridgeProtocol, u32, bool, u64) =
             soroban_sdk::FromVal::from_val(&env, &event.2);
+        assert_eq!(emitted_bridge, BridgeProtocol::Wormhole);
         assert_eq!(emitted_confirmations, MIN_BRIDGE_CONFIRMATIONS - 1);
         assert!(!emitted_is_finalized);
+        assert_eq!(emitted_updated_at, conf.updated_at);
 
         let brief_hash = soroban_sdk::BytesN::from_array(&env, &[1u8; 32]);
         let multisig = crate::MultisigConfig {
@@ -303,10 +310,17 @@ mod bridge_tests {
                     && Address::try_from_val(&env, &topics.get(1).unwrap()).unwrap() == token_addr
             })
             .expect("expected brg_cnf event for 15 confirmations");
-        let (emitted_confirmations, emitted_is_finalized): (u32, bool) =
+        let (
+            emitted_bridge,
+            emitted_confirmations,
+            emitted_is_finalized,
+            emitted_updated_at,
+        ): (BridgeProtocol, u32, bool, u64) =
             soroban_sdk::FromVal::from_val(&env, &event.2);
+        assert_eq!(emitted_bridge, BridgeProtocol::Wormhole);
         assert_eq!(emitted_confirmations, MIN_BRIDGE_CONFIRMATIONS);
         assert!(emitted_is_finalized);
+        assert_eq!(emitted_updated_at, conf.updated_at);
 
         let result = client.try_create_escrow(
             &escrow_client,

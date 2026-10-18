@@ -602,7 +602,10 @@ impl InsuranceContract {
         let token = token::Client::new(&env, &Storage::get_token(&env));
         let balance = token.balance(&env.current_contract_address());
         if balance < amount {
-            return Err(InsuranceError::InsufficientFunds);
+            // Keep payout-reserve failures distinct from transient shortages in
+            // staking/yield paths so callers can present deterministic recovery
+            // guidance and indexers can classify solvency incidents reliably.
+            return Err(InsuranceError::ReserveInsufficient);
         }
 
         // CEI: commit state before external call so reentry sees Paid status.
@@ -1346,7 +1349,141 @@ mod tests {
         s.client.vote(&gov2, &id, &true);
 
         let result = s.client.try_execute_payout(&id);
+        assert_eq!(result.unwrap_err().unwrap(), InsuranceError::ReserveInsufficient);
+
+        // A failed payout must not consume the approved claim or corrupt the
+        // accounting snapshot; operators can fund the reserve and retry.
+        assert_eq!(s.client.get_claim(&id).status, ClaimStatus::Approved);
+        let info = s.client.get_fund_info();
+        assert_eq!(info.total_paid_out, 0);
+        assert_eq!(info.paid_claims, 0);
+        assert_eq!(info.current_balance, 0);
+    }
+
+    // ── Reserve solvency invariants (issues #354, #356) ─────────────────────
+
+    #[test]
+    fn test_reserve_accounting_remains_solvent_after_exact_payout() {
+        let s = setup();
+        let funder = Address::generate(&s.env);
+        let claimant = Address::generate(&s.env);
+        let governor = Address::generate(&s.env);
+        let description = String::from_str(&s.env, "Exact reserve payout");
+
+        mint(&s.env, &s.admin, &s.token_id, &funder, 1_000);
+        s.client.contribute(&funder, &1_000);
+        s.client.set_quorum(&s.admin, &1);
+        s.client.add_governor(&s.admin, &governor);
+
+        let claim_id = s.client.submit_claim(&claimant, &description, &1_000);
+        s.client.vote(&governor, &claim_id, &true);
+        s.client.execute_payout(&claim_id);
+
+        let info = s.client.get_fund_info();
+        assert_eq!(info.current_balance, 0);
+        assert_eq!(info.total_paid_out, 1_000);
+        assert_eq!(info.total_contributed - info.total_paid_out, info.current_balance);
+        assert_eq!(s.client.get_claim(&claim_id).status, ClaimStatus::Paid);
+    }
+
+    #[test]
+    fn test_claim_at_cap_is_accepted_but_claim_above_cap_has_stable_error() {
+        let s = setup();
+        let claimant = Address::generate(&s.env);
+        let description = String::from_str(&s.env, "Claim cap boundary");
+
+        let at_cap = s.client.submit_claim(&claimant, &description, &10_000);
+        assert_eq!(s.client.get_claim(&at_cap).amount, 10_000);
+
+        let result = s.client.try_submit_claim(&claimant, &description, &10_001);
+        assert_eq!(result.unwrap_err().unwrap(), InsuranceError::ClaimExceedsCap);
+    }
+
+    // ── Authorization boundaries for reserve controls (issue #355) ──────────
+
+    #[test]
+    fn test_reserve_control_rejects_incorrect_admin() {
+        let s = setup();
+        let other = Address::generate(&s.env);
+
+        let result = s.client.try_set_claim_cap(&other, &20_000);
+        assert_eq!(result.unwrap_err().unwrap(), InsuranceError::AdminOnly);
+    }
+
+    #[test]
+    fn test_reserve_control_rejects_missing_authorization() {
+        let s = setup();
+
+        // Replace the broad fixture authorization with an empty set. The
+        // caller identity is correct, but no current signature is present.
+        let result = s
+            .client
+            .mock_auths(&[])
+            .try_set_claim_cap(&s.admin, &20_000);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_all_admin_reserve_controls_reject_incorrect_caller() {
+        let s = setup();
+        let other = Address::generate(&s.env);
+        let governor = Address::generate(&s.env);
+
+        assert_eq!(
+            s.client
+                .try_set_claim_cap(&other, &20_000)
+                .unwrap_err()
+                .unwrap(),
+            InsuranceError::AdminOnly
+        );
+        assert_eq!(
+            s.client.try_set_quorum(&other, &1).unwrap_err().unwrap(),
+            InsuranceError::AdminOnly
+        );
+        assert_eq!(
+            s.client
+                .try_add_governor(&other, &governor)
+                .unwrap_err()
+                .unwrap(),
+            InsuranceError::AdminOnly
+        );
+        assert_eq!(
+            s.client
+                .try_remove_governor(&other, &governor)
+                .unwrap_err()
+                .unwrap(),
+            InsuranceError::AdminOnly
+        );
+        assert_eq!(
+            s.client
+                .try_add_platform_fees(&other, &1)
+                .unwrap_err()
+                .unwrap(),
+            InsuranceError::AdminOnly
+        );
+        assert_eq!(
+            s.client
+                .try_set_max_slash_bps(&other, &1_000)
+                .unwrap_err()
+                .unwrap(),
+            InsuranceError::AdminOnly
+        );
+    }
+
+    #[test]
+    fn test_reserve_control_rejects_stale_governor_authority() {
+        let s = setup();
+        let governor = Address::generate(&s.env);
+        let claimant = Address::generate(&s.env);
+        let description = String::from_str(&s.env, "Revoked governor vote");
+
+        s.client.add_governor(&s.admin, &governor);
+        s.client.remove_governor(&s.admin, &governor);
+        let claim_id = s.client.submit_claim(&claimant, &description, &100);
+
+        let result = s.client.try_vote(&governor, &claim_id, &true);
+        assert_eq!(result.unwrap_err().unwrap(), InsuranceError::NotGovernor);
+        assert_eq!(s.client.get_claim(&claim_id).status, ClaimStatus::Pending);
     }
 
     // ── Admin config ──────────────────────────────────────────────────────────

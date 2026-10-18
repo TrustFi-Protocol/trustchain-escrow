@@ -115,13 +115,16 @@ pub fn emit_wrapped_token_registered(env: &Env, token: &Address, origin_chain: &
 
 pub fn emit_bridge_confirmation_updated(
     env: &Env,
-    token: &Address,
-    confirmations: u32,
-    is_finalized: bool,
+    confirmation: &BridgeConfirmation,
 ) {
     env.events().publish(
-        (symbol_short!("brg_cnf"), token.clone()),
-        (confirmations, is_finalized),
+        (symbol_short!("brg_cnf"), confirmation.token.clone()),
+        (
+            confirmation.bridge.clone(),
+            confirmation.confirmations,
+            confirmation.is_finalized,
+            confirmation.updated_at,
+        ),
     );
 }
 
