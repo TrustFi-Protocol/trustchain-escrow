@@ -39,6 +39,7 @@ import ReputationBadge from '../../../components/ui/ReputationBadge';
 import CurrencyAmount from '../../../components/ui/CurrencyAmount';
 import TransactionHash from '../../../components/ui/TransactionHash';
 import Avatar from '../../../components/ui/Avatar';
+import { getPaymentTokenAvailability } from './paymentTokenAvailability';
 import {
   buildApproveMilestoneTx,
   buildSubmitMilestoneTx,
@@ -132,6 +133,10 @@ export default function EscrowDetailPage({ params }) {
         ? 'freelancer'
         : 'observer'
     : 'observer';
+  const paymentTokenAvailability = getPaymentTokenAvailability(
+    { ...escrow, status: isExpired ? 'Expired' : escrow.status },
+    address,
+  );
 
   const handleApproveMilestone = async (milestoneId) => {
     setIsActionLoading(true);
@@ -239,13 +244,13 @@ export default function EscrowDetailPage({ params }) {
           />
         </div>
         <div className="flex gap-2 flex-shrink-0">
-          {(escrow.status === 'Active' || escrow.status === 'Expired') && (
+          {paymentTokenAvailability.isActive && (
             <>
               <Button
                 variant="danger"
                 size="sm"
-                disabled={isExpired}
-                title={isExpired ? 'This escrow has expired' : undefined}
+                disabled={!paymentTokenAvailability.canRaiseDispute}
+                aria-describedby={!paymentTokenAvailability.canRaiseDispute ? 'raise-dispute-gate' : undefined}
                 onClick={() => setDisputeOpen(true)}
               >
                 ⚠ Raise Dispute
@@ -253,12 +258,22 @@ export default function EscrowDetailPage({ params }) {
               <Button
                 variant="secondary"
                 size="sm"
-                disabled={isExpired}
-                title={isExpired ? 'This escrow has expired' : undefined}
+                disabled={!paymentTokenAvailability.canCancel}
+                aria-describedby={!paymentTokenAvailability.canCancel ? 'cancel-escrow-gate' : undefined}
                 onClick={() => setCancelOpen(true)}
               >
                 Cancel Escrow
               </Button>
+              {!paymentTokenAvailability.canRaiseDispute && (
+                <span id="raise-dispute-gate" className="sr-only">
+                  {paymentTokenAvailability.disputeReason}
+                </span>
+              )}
+              {!paymentTokenAvailability.canCancel && (
+                <span id="cancel-escrow-gate" className="sr-only">
+                  {paymentTokenAvailability.cancelReason}
+                </span>
+              )}
             </>
           )}
         </div>
@@ -293,6 +308,8 @@ export default function EscrowDetailPage({ params }) {
         <InfoCell label="Created" value={escrow.createdAt} />
         <InfoCell label="Deadline" value={escrow.deadline || 'None'} />
       </div>
+
+      <PaymentTokenAvailability availability={paymentTokenAvailability} />
 
       {escrow.status === 'Active' && (
         <ExpiryExtensionRequest
@@ -381,6 +398,24 @@ function InfoCell({ label, value, isAmount = false }) {
         <p className="text-white font-semibold mt-1">{value}</p>
       )}
     </div>
+  );
+}
+
+function PaymentTokenAvailability({ availability }) {
+  const available = availability.isTokenAvailable;
+  return (
+    <section className="card flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between" data-testid="payment-token-availability">
+      <div>
+        <h2 className="text-sm font-semibold text-gray-200">Payment token availability</h2>
+        <p className="text-xs text-gray-500">{availability.token}</p>
+      </div>
+      <span
+        className={available ? 'text-sm text-emerald-400' : 'text-sm text-amber-300'}
+        role="status"
+      >
+        {available ? 'Available for escrow actions' : 'Temporarily unavailable'}
+      </span>
+    </section>
   );
 }
 
