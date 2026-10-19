@@ -41,4 +41,12 @@ pub enum ExtError {
     // ── Arithmetic ────────────────────────────────────────────────────────────
     /// A checked arithmetic operation (add/mul) overflowed.
     ArithmeticOverflow = 44,
+
+    // ── Cross-asset path payment limits (#424 / #422) ─────────────────────────
+    /// The requested path-payment limit exceeds PATH_PAYMENT_LIMIT_MAX
+    /// (i128::MAX / 2).  Rejected to prevent overflow in downstream fee math.
+    PathPaymentLimitTooHigh = 50,
+    /// The requested payment amount exceeds the active per-token path-payment
+    /// limit set by the admin.
+    PathPaymentLimitExceeded = 51,
 }

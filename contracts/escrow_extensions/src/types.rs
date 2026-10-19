@@ -101,4 +101,7 @@ pub enum DataKey {
     PendingUpgrade,
     /// Storage version for migration.
     StorageVersion,
+    /// Per-token cross-asset path-payment cap set by the admin.
+    /// `token Address → i128`; 0 means no cap.
+    PathPaymentLimit(Address),
 }

@@ -12,6 +12,7 @@ crate-type = ["cdylib", "rlib"]
 soroban-sdk = { version = "21.0.0", features = [] }
 
 [dev-dependencies]
+criterion = "0.4"
 soroban-sdk = { version = "21.0.0", features = ["testutils"] }
 
 [[bench]]

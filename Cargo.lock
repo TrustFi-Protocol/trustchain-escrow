@@ -1794,6 +1794,7 @@ dependencies = [
 name = "stellar-trust-escrow-extensions"
 version = "0.1.0"
 dependencies = [
+ "criterion",
  "soroban-sdk",
  "stellar-trust-shared",
 ]
@@ -1810,6 +1811,7 @@ dependencies = [
 name = "stellar-trust-insurance-contract"
 version = "0.1.0"
 dependencies = [
+ "criterion",
  "soroban-sdk",
 ]
 
