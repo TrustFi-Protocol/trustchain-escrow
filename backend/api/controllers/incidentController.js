@@ -3,6 +3,9 @@
  *
  * REST API for incident lifecycle management.
  * All routes require admin authentication.
+ *
+ * Notification routing recovery (detection, mitigation, rollback, verification):
+ * docs/incidents/runbooks/notification-routing-recovery.md
  */
 
 import incidentService from '../../services/incidentService.js';

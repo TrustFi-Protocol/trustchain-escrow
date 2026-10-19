@@ -12,6 +12,7 @@ This directory contains everything needed to respond to, track, and learn from i
 | `runbooks/sev4-low-impact.md`           | SEV4 response steps                     |
 | `runbooks/database-outage.md`           | DB-specific runbook                     |
 | `runbooks/smart-contract-exploit.md`    | Security incident runbook               |
+| `runbooks/notification-routing-recovery.md` | Alert/webhook routing recovery      |
 | `templates/post-mortem.md`              | Post-mortem template                    |
 | `templates/status-page-update.md`       | User-facing communication template      |
 | `templates/internal-comms.md`           | Internal Slack/email templates          |
@@ -43,6 +44,8 @@ GET    /api/incidents/:id                Get incident detail
 PATCH  /api/incidents/:id/status         Transition status
 POST   /api/incidents/:id/post-mortem    Attach post-mortem
 GET    /api/incidents/oncall             Current on-call engineer
+GET    /api/incidents/retention          Effective retention policy
+POST   /api/incidents/retention/prune    Prune resolved/closed incidents (supports dryRun)
 ```
 
 ## Alerting
