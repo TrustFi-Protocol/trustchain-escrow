@@ -1,6 +1,63 @@
+import crypto from 'crypto';
 import exportService from '../../services/exportService.js';
+import { createModuleLogger } from '../../config/logger.js';
+import { exportDeliveriesTotal, exportDeliveryDuration } from '../../lib/metrics.js';
 
 const LARGE_EXPORT_LIMIT_BYTES = 10 * 1024 * 1024;
+
+const log = createModuleLogger('controller.export');
+
+/** Closed label sets keep export delivery metrics bounded. */
+const DELIVERY_OPERATIONS = new Set(['export', 'download', 'job']);
+const DELIVERY_OUTCOMES = new Set(['delivered', 'queued', 'invalid', 'forbidden', 'failed']);
+
+/** Non-reversible short reference so logs can be correlated without exposing the address. */
+export function subjectRef(address) {
+  if (!address) return null;
+  return crypto.createHash('sha256').update(String(address)).digest('hex').slice(0, 12);
+}
+
+/**
+ * Emits one bounded metric sample and one correlated structured log line per
+ * export delivery attempt. Never logs raw addresses, download URLs, tokens,
+ * export payloads, or error messages.
+ */
+export function recordExportDelivery(req, operation, outcome, startedAt, extra = {}) {
+  const labels = {
+    operation: DELIVERY_OPERATIONS.has(operation) ? operation : 'other',
+    outcome: DELIVERY_OUTCOMES.has(outcome) ? outcome : 'other',
+  };
+  const durationMs = Math.max(0, Date.now() - startedAt);
+
+  const level =
+    labels.outcome === 'failed'
+      ? 'error'
+      : labels.outcome === 'forbidden' || labels.outcome === 'invalid'
+        ? 'warn'
+        : 'info';
+
+  // Telemetry must never break export delivery.
+  try {
+    exportDeliveriesTotal.inc(labels);
+    exportDeliveryDuration.observe(labels, durationMs);
+    log[level]({
+      message: 'export.delivery',
+      ...labels,
+      durationMs,
+      correlationId: req.correlationId ?? req.id ?? null,
+      tenantId: req.tenant?.id ?? null,
+      subjectRef: subjectRef(req.params?.address),
+      actor: req.isAdmin ? 'admin' : 'self',
+      ...extra,
+    });
+  } catch {
+    // ignore telemetry failures
+  }
+}
+
+function errorCode(error) {
+  return String(error?.code ?? error?.name ?? 'Error').slice(0, 64);
+}
 
 /**
  * Export Controller
@@ -12,17 +69,20 @@ const LARGE_EXPORT_LIMIT_BYTES = 10 * 1024 * 1024;
  * @route GET /api/users/:address/export
  */
 const exportUserData = async (req, res) => {
+  const startedAt = Date.now();
   try {
     const { address } = req.params;
 
     // Validate address format (Stellar addresses start with G)
     if (!address || !address.startsWith('G')) {
+      recordExportDelivery(req, 'export', 'invalid', startedAt);
       return res.status(400).json({
         error: 'Invalid Stellar address format',
       });
     }
 
     if (req.user?.address !== address && !req.isAdmin) {
+      recordExportDelivery(req, 'export', 'forbidden', startedAt);
       return res.status(403).json({ error: 'Forbidden' });
     }
 
@@ -42,6 +102,7 @@ const exportUserData = async (req, res) => {
         tenantId,
         requestedBy: req.user?.address,
       });
+      recordExportDelivery(req, 'export', 'queued', startedAt, { jobId: queued.jobId });
       return res.status(202).json({
         status: 'queued',
         message: 'Export is larger than 10MB and will be delivered by email.',
@@ -49,9 +110,10 @@ const exportUserData = async (req, res) => {
       });
     }
 
+    recordExportDelivery(req, 'export', 'delivered', startedAt);
     res.json(data);
   } catch (error) {
-    console.error('Export error:', error);
+    recordExportDelivery(req, 'export', 'failed', startedAt, { errorCode: errorCode(error) });
     res.status(500).json({
       error: 'Failed to export user data',
     });
@@ -114,17 +176,20 @@ const importUserData = async (req, res) => {
  * @route GET /api/users/:address/export/file
  */
 const downloadExportFile = async (req, res) => {
+  const startedAt = Date.now();
   try {
     const { address } = req.params;
 
     // Validate address format
     if (!address || !address.startsWith('G')) {
+      recordExportDelivery(req, 'download', 'invalid', startedAt);
       return res.status(400).json({
         error: 'Invalid Stellar address format',
       });
     }
 
     if (req.user?.address !== address && !req.isAdmin) {
+      recordExportDelivery(req, 'download', 'forbidden', startedAt);
       return res.status(403).json({ error: 'Forbidden' });
     }
 
@@ -144,6 +209,7 @@ const downloadExportFile = async (req, res) => {
         tenantId,
         requestedBy: req.user?.address,
       });
+      recordExportDelivery(req, 'download', 'queued', startedAt, { jobId: queued.jobId });
       return res.status(202).json({
         status: 'queued',
         message: 'Export is larger than 10MB and will be delivered by email.',
@@ -151,6 +217,7 @@ const downloadExportFile = async (req, res) => {
       });
     }
 
+    recordExportDelivery(req, 'download', 'delivered', startedAt);
     res.setHeader('Content-Type', 'application/json');
     res.setHeader(
       'Content-Disposition',
@@ -158,7 +225,7 @@ const downloadExportFile = async (req, res) => {
     );
     res.send(fileContent);
   } catch (error) {
-    console.error('Download export error:', error);
+    recordExportDelivery(req, 'download', 'failed', startedAt, { errorCode: errorCode(error) });
     res.status(500).json({
       error: 'Failed to generate export file',
     });
@@ -198,13 +265,16 @@ const deleteUserData = async (req, res) => {
  * @route POST /api/users/:address/export/jobs
  */
 const createExportJob = async (req, res) => {
+  const startedAt = Date.now();
   try {
     const { address } = req.params;
     if (!address || !address.startsWith('G')) {
+      recordExportDelivery(req, 'job', 'invalid', startedAt);
       return res.status(400).json({ error: 'Invalid Stellar address format' });
     }
 
     if (req.user?.address !== address && !req.isAdmin) {
+      recordExportDelivery(req, 'job', 'forbidden', startedAt);
       return res.status(403).json({ error: 'Forbidden' });
     }
 
@@ -214,6 +284,7 @@ const createExportJob = async (req, res) => {
       type: 'escrow_export',
     });
 
+    recordExportDelivery(req, 'job', 'queued', startedAt, { jobId: job.id });
     return res.status(202).json({
       status: 'queued',
       message: 'Export job queued',
@@ -221,7 +292,7 @@ const createExportJob = async (req, res) => {
       job,
     });
   } catch (error) {
-    console.error('Create export job error:', error);
+    recordExportDelivery(req, 'job', 'failed', startedAt, { errorCode: errorCode(error) });
     return res.status(500).json({ error: 'Failed to create export job' });
   }
 };

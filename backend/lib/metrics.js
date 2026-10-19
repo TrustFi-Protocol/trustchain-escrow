@@ -251,4 +251,21 @@ export const compressionRatio = new client.Histogram({
   registers: [register],
 });
 
+// ── Export Delivery Metrics ───────────────────────────────────────────────────
+
+export const exportDeliveriesTotal = new client.Counter({
+  name: 'export_deliveries_total',
+  help: 'Total tenant audit export delivery attempts by operation and outcome',
+  labelNames: ['operation', 'outcome'],
+  registers: [register],
+});
+
+export const exportDeliveryDuration = new client.Histogram({
+  name: 'export_delivery_duration_ms',
+  help: 'Duration of tenant audit export delivery requests in milliseconds',
+  labelNames: ['operation', 'outcome'],
+  buckets: [10, 50, 100, 250, 500, 1000, 2500, 5000, 10000, 30000],
+  registers: [register],
+});
+
 export { register };
