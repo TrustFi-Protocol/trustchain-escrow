@@ -398,6 +398,14 @@ All values are TTLs in **seconds**.
 | `CACHE_TTL_REPUTATION`  | `60`    | Reputation lookups.                 |
 | `CACHE_TTL_STATIC`      | `600`   | Rarely-changing static payloads.    |
 
+Retention bounds for tenant-scoped cache entries:
+
+| Variable                    | Default | Applies to                                                        |
+| --------------------------- | ------- | ----------------------------------------------------------------- |
+| `CACHE_TTL_MAX`             | `3600`  | Upper bound (seconds) applied to every per-route TTL.             |
+| `CACHE_TENANT_MAX_KEYS`     | `1000`  | Tracked keys per tenant; the oldest key is evicted beyond this.   |
+| `CACHE_MAX_TRACKED_TENANTS` | `500`   | Tracked tenants; the oldest tenant's tracked keys are evicted.    |
+
 ### Search (Elasticsearch)
 
 | Variable                | Default                  | Description                                              |

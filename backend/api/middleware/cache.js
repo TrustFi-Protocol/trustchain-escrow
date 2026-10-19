@@ -38,11 +38,23 @@
  *   CACHE_TTL_LEADERBOARD=300
  *   CACHE_TTL_EVENTS=15
  *
+ * ## Retention bounds
+ *
+ *   CACHE_TTL_MAX=3600              — upper bound applied to every per-route TTL
+ *   CACHE_TENANT_MAX_KEYS=1000      — tracked keys per tenant; oldest is evicted
+ *   CACHE_MAX_TRACKED_TENANTS=500   — tracked tenants; oldest tenant's keys are evicted
+ *
+ * `purgeTenantCache(slug)` removes every `t:<slug>:` entry for safe cleanup.
+ *
  * @module middleware/cache
  */
 
 import { createHash } from 'crypto';
 import cache from '../../lib/cache.js';
+import { createModuleLogger } from '../../config/logger.js';
+import { BoundedRetentionStore } from '../../lib/operationalControls.js';
+
+const log = createModuleLogger('middleware.cache');
 
 // ── TTL presets (overridable via env) ─────────────────────────────────────────
 
@@ -55,6 +67,75 @@ export const TTL = {
   REPUTATION: parseInt(process.env.CACHE_TTL_REPUTATION || '60', 10),
   STATIC: parseInt(process.env.CACHE_TTL_STATIC || '600', 10),
 };
+
+// ── Retention controls ────────────────────────────────────────────────────────
+
+function positiveInt(raw, fallback) {
+  const value = Number(raw);
+  return Number.isInteger(value) && value > 0 ? value : fallback;
+}
+
+export const RETENTION = Object.freeze({
+  MAX_TTL: positiveInt(process.env.CACHE_TTL_MAX, 3600),
+  MAX_KEYS_PER_TENANT: positiveInt(process.env.CACHE_TENANT_MAX_KEYS, 1000),
+  MAX_TRACKED_TENANTS: positiveInt(process.env.CACHE_MAX_TRACKED_TENANTS, 500),
+});
+
+const TENANT_SLUG_RE = /^[A-Za-z0-9_-]{1,64}$/;
+
+function dropKey(key) {
+  Promise.resolve()
+    .then(() => cache.invalidate(key))
+    .catch((err) => log.warn({ message: 'cache.retention_evict_failed', error: err.message }));
+}
+
+/** slug → BoundedRetentionStore of cache keys written for that tenant. */
+const tenantKeys = new BoundedRetentionStore(RETENTION.MAX_TRACKED_TENANTS, {
+  onEvict: (_slug, keys) => {
+    for (const key of keys.entries.keys()) dropKey(key);
+  },
+});
+
+function trackKey(slug, key) {
+  let keys = tenantKeys.get(slug);
+  if (!keys) {
+    keys = new BoundedRetentionStore(RETENTION.MAX_KEYS_PER_TENANT, { onEvict: dropKey });
+  }
+  keys.set(key, true);
+  tenantKeys.set(slug, keys);
+}
+
+/**
+ * Clamps a TTL into `[1, RETENTION.MAX_TTL]`; invalid values fall back to TTL.DEFAULT.
+ *
+ * @param {number} ttl
+ * @returns {number}
+ */
+export function boundTtl(ttl) {
+  const value = Number.isFinite(ttl) && ttl >= 1 ? Math.floor(ttl) : positiveInt(TTL.DEFAULT, 60);
+  return Math.min(value, RETENTION.MAX_TTL);
+}
+
+/** Number of cache keys currently tracked for a tenant slug. */
+export function getTrackedKeyCount(slug) {
+  return tenantKeys.get(slug)?.size ?? 0;
+}
+
+/**
+ * Removes every cached entry scoped to one tenant (`t:<slug>:*`).
+ * Rejects malformed slugs so a bad input can never widen the purge.
+ *
+ * @param {string} slug
+ * @returns {Promise<void>}
+ */
+export async function purgeTenantCache(slug) {
+  if (typeof slug !== 'string' || !TENANT_SLUG_RE.test(slug)) {
+    throw new TypeError('purgeTenantCache requires a valid tenant slug');
+  }
+  await cache.invalidatePrefix(`t:${slug}:`);
+  tenantKeys.delete(slug);
+  log.info({ message: 'cache.tenant_purged' });
+}
 
 // ── Key builder ───────────────────────────────────────────────────────────────
 
@@ -116,7 +197,8 @@ function tenantTag(tag, req) {
  * @returns {import('express').RequestHandler}
  */
 export function cacheResponse(options = {}) {
-  const { ttl = TTL.DEFAULT, tags = [], keyFn = buildCacheKey, skip } = options;
+  const { tags = [], keyFn = buildCacheKey, skip } = options;
+  const ttl = boundTtl(options.ttl ?? TTL.DEFAULT);
 
   return async (req, res, next) => {
     // Only cache GET / HEAD requests
@@ -147,6 +229,7 @@ export function cacheResponse(options = {}) {
           tenantTag(t, req),
         );
         await cache.setWithTags(key, body, ttl, resolvedTags);
+        trackKey(req.tenant?.slug ?? '_global', key);
       }
       return originalJson(body);
     };

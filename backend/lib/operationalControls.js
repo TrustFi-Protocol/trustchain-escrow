@@ -1,17 +1,26 @@
 export class BoundedRetentionStore {
-  constructor(limit = 1000) {
+  constructor(limit = 1000, { onEvict } = {}) {
     if (!Number.isInteger(limit) || limit < 1) throw new TypeError('retention limit must be a positive integer');
     this.limit = limit;
+    this.onEvict = onEvict;
     this.entries = new Map();
   }
 
   set(key, value) {
     this.entries.delete(key);
     this.entries.set(key, value);
-    while (this.entries.size > this.limit) this.entries.delete(this.entries.keys().next().value);
+    while (this.entries.size > this.limit) {
+      const [oldestKey, oldestValue] = this.entries.entries().next().value;
+      this.entries.delete(oldestKey);
+      this.onEvict?.(oldestKey, oldestValue);
+    }
   }
 
   get(key) { return this.entries.get(key); }
+
+  delete(key) { return this.entries.delete(key); }
+
+  get size() { return this.entries.size; }
 }
 
 export function createSingleFlight() {
