@@ -332,6 +332,7 @@ See [docs/security-model.md](docs/security-model.md) for the complete security m
 - [Multi-Tenant Architecture](docs/multi-tenant-architecture.md) — Tenant model, tenant resolution, data isolation guarantees, and audit chain integrity.
 - [Stellar Network Integration](docs/stellar-network-integration.md) — Local sandbox, testnet, and mainnet setup with contract deployment and wallet management.
 - [Operational Runbook](docs/runbooks/operational-runbook.md) — Common operational tasks including health checks, service restarts, database maintenance, contract upgrades, and scaling.
+- [Tenant Cache Isolation Recovery](docs/runbooks/tenant-cache-isolation-recovery.md) — Detection, mitigation, rollback, and verification for tenant-scoped response cache incidents.
 - [Changelog and Versioning Policy](docs/versioning-policy.md) — SemVer policy, changelog format, and release process.
 
 ---

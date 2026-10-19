@@ -46,6 +46,11 @@
  *
  * `purgeTenantCache(slug)` removes every `t:<slug>:` entry for safe cleanup.
  *
+ * ## Recovery
+ *
+ * Detection, mitigation, rollback, and verification steps for isolation
+ * incidents: docs/runbooks/tenant-cache-isolation-recovery.md
+ *
  * @module middleware/cache
  */
 
