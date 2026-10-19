@@ -15,6 +15,12 @@ router.get('/', incidentController.listIncidents);
 /** GET  /api/incidents/oncall    — current on-call engineer */
 router.get('/oncall', incidentController.getOnCall);
 
+/** GET  /api/incidents/retention — effective retention policy */
+router.get('/retention', incidentController.getRetentionPolicy);
+
+/** POST /api/incidents/retention/prune — prune resolved/closed incidents (supports dryRun) */
+router.post('/retention/prune', incidentController.pruneIncidents);
+
 /** POST /api/incidents           — create a new incident */
 router.post('/', incidentController.createIncident);
 

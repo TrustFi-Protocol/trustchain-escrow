@@ -93,6 +93,30 @@ const linkEscrows = async (req, res) => {
   }
 };
 
+const getRetentionPolicy = (_req, res) => {
+  res.json(incidentService.getRetentionPolicy());
+};
+
+/**
+ * Prunes resolved/closed incidents outside the retention window.
+ * Body: { dryRun?: boolean, retentionDays?: integer }
+ */
+const pruneIncidents = (req, res) => {
+  const { dryRun = false, retentionDays } = req.body ?? {};
+  if (typeof dryRun !== 'boolean') {
+    return res.status(400).json({ error: 'dryRun must be a boolean' });
+  }
+  if (retentionDays !== undefined && !Number.isInteger(retentionDays)) {
+    return res.status(400).json({ error: 'retentionDays must be an integer' });
+  }
+  try {
+    return res.json(incidentService.pruneIncidents({ dryRun, retentionDays }));
+  } catch (err) {
+    const code = err.message.startsWith('Invalid retention') ? 400 : 500;
+    return res.status(code).json({ error: err.message });
+  }
+};
+
 const getOnCall = (_req, res) => {
   res.json({
     current: incidentService.getCurrentOnCall(),
@@ -107,5 +131,7 @@ export default {
   updateStatus,
   attachPostMortem,
   linkEscrows,
+  getRetentionPolicy,
+  pruneIncidents,
   getOnCall,
 };

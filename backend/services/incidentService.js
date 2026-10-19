@@ -63,6 +63,105 @@ const TRANSITIONS = {
 /** @type {Map<string, Incident>} */
 const incidents = new Map();
 
+// ── Retention ─────────────────────────────────────────────────────────────────
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+const MAX_RETENTION_DAYS = 3650;
+
+/** Statuses whose incidents are eligible for retention cleanup. Active incidents are never pruned. */
+const PRUNABLE_STATUSES = new Set([Status.RESOLVED, Status.CLOSED]);
+
+function positiveIntFromEnv(name, fallback) {
+  const parsed = Number.parseInt(process.env[name] ?? '', 10);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+/**
+ * Returns the effective retention policy for persisted incident records.
+ *
+ *   INCIDENT_RETENTION_DAYS        — days a resolved/closed incident is kept (default 90)
+ *   INCIDENT_MAX_RETAINED          — upper bound on stored incidents (default 1000)
+ *   INCIDENT_MAX_TIMELINE_ENTRIES  — upper bound on timeline entries per incident (default 200)
+ */
+export function getRetentionPolicy() {
+  return {
+    retentionDays: Math.min(positiveIntFromEnv('INCIDENT_RETENTION_DAYS', 90), MAX_RETENTION_DAYS),
+    maxRetained: positiveIntFromEnv('INCIDENT_MAX_RETAINED', 1000),
+    maxTimelineEntries: positiveIntFromEnv('INCIDENT_MAX_TIMELINE_ENTRIES', 200),
+    prunableStatuses: [...PRUNABLE_STATUSES],
+  };
+}
+
+/** Appends a timeline entry, keeping the creation entry plus the most recent entries. */
+function appendTimeline(incident, entry) {
+  incident.timeline.push(entry);
+  const { maxTimelineEntries } = getRetentionPolicy();
+  if (incident.timeline.length > maxTimelineEntries) {
+    const [first, ...rest] = incident.timeline;
+    incident.timeline =
+      maxTimelineEntries === 1 ? [entry] : [first, ...rest.slice(-(maxTimelineEntries - 1))];
+  }
+}
+
+function terminalTimestamp(incident) {
+  return new Date(incident.resolvedAt ?? incident.updatedAt ?? incident.createdAt).getTime();
+}
+
+/**
+ * Removes resolved/closed incidents older than the retention window, then evicts the
+ * oldest resolved/closed incidents while the store exceeds `maxRetained`.
+ * Open, acknowledged, investigating, mitigated, and post-mortem incidents are never removed.
+ *
+ * @param {object} [opts]
+ * @param {number}  [opts.retentionDays] — override the configured retention window
+ * @param {boolean} [opts.dryRun=false]  — report what would be removed without deleting
+ * @param {number}  [opts.now=Date.now()]
+ * @returns {{ dryRun: boolean, retentionDays: number, cutoff: string, evaluated: number, prunedIds: string[], retained: number }}
+ */
+export function pruneIncidents({ retentionDays, dryRun = false, now = Date.now() } = {}) {
+  const policy = getRetentionPolicy();
+  const days = retentionDays ?? policy.retentionDays;
+  if (!Number.isInteger(days) || days < 1 || days > MAX_RETENTION_DAYS) {
+    throw new Error(
+      `Invalid retention: retentionDays must be an integer between 1 and ${MAX_RETENTION_DAYS}`,
+    );
+  }
+
+  const cutoffMs = now - days * DAY_MS;
+  const terminal = [...incidents.values()]
+    .filter((i) => PRUNABLE_STATUSES.has(i.status))
+    .sort((a, b) => terminalTimestamp(a) - terminalTimestamp(b) || a.id.localeCompare(b.id));
+
+  const pruned = new Set(terminal.filter((i) => terminalTimestamp(i) < cutoffMs).map((i) => i.id));
+
+  let remaining = incidents.size - pruned.size;
+  for (const incident of terminal) {
+    if (remaining <= policy.maxRetained) break;
+    if (!pruned.has(incident.id)) {
+      pruned.add(incident.id);
+      remaining -= 1;
+    }
+  }
+
+  const prunedIds = [...pruned].sort();
+  const evaluated = incidents.size;
+  if (!dryRun) {
+    for (const id of prunedIds) incidents.delete(id);
+    if (prunedIds.length > 0) {
+      console.log(`[Incident] retention pruned=${prunedIds.length} retentionDays=${days}`);
+    }
+  }
+
+  return {
+    dryRun,
+    retentionDays: days,
+    cutoff: new Date(cutoffMs).toISOString(),
+    evaluated,
+    prunedIds,
+    retained: evaluated - prunedIds.length,
+  };
+}
+
 // ── On-call rotation ──────────────────────────────────────────────────────────
 
 /**
@@ -359,6 +458,7 @@ export async function createIncident({
   };
 
   incidents.set(id, incident);
+  if (incidents.size > getRetentionPolicy().maxRetained) pruneIncidents();
   console.error(`[Incident] ${id} CREATED severity=${severity} title="${title}"`);
 
   await dispatchAlerts('trigger', incident);
@@ -395,7 +495,7 @@ export async function updateIncidentStatus(id, newStatus, { actor = 'system', no
     incident.resolvedAt = now;
   }
 
-  incident.timeline.push({ ts: now, status: newStatus, actor, note });
+  appendTimeline(incident, { ts: now, status: newStatus, actor, note });
   incidents.set(id, incident);
 
   const pdAction =
@@ -444,7 +544,7 @@ export async function linkEscrowsToIncident(id, escrowIds = [], { actor = 'syste
   incident.affectedEscrowIds = Array.from(existingEscrows);
   const now = new Date().toISOString();
   incident.updatedAt = now;
-  incident.timeline.push({
+  appendTimeline(incident, {
     ts: now,
     status: incident.status,
     actor,
@@ -545,6 +645,8 @@ export default {
   listIncidents,
   getCurrentOnCall,
   getOnCallSchedule,
+  getRetentionPolicy,
+  pruneIncidents,
   Severity,
   Status,
   __resetForTests,
