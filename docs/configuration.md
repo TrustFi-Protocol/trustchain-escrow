@@ -474,6 +474,11 @@ See [docs/elasticsearch-reputation-index.md](elasticsearch-reputation-index.md).
 | ----------------------- | ------- | -------------------------------------------------------------- |
 | `STRIPE_SECRET_KEY`     | —       | Stripe secret key.                                             |
 | `STRIPE_WEBHOOK_SECRET` | —       | Verifies inbound Stripe webhook signatures. Distinct from Trustchain's own outbound webhook secrets. |
+| `PAYMENT_REPLAY_REQUIRE_IDEMPOTENCY_KEY` | `false` | `true` rejects `POST /api/payments/checkout` without an `Idempotency-Key` header. |
+| `PAYMENT_REPLAY_KEY_MIN_LENGTH` | `1` | Minimum `Idempotency-Key` length (1–255). Must not exceed the maximum. |
+| `PAYMENT_REPLAY_KEY_MAX_LENGTH` | `255` | Maximum `Idempotency-Key` length (1–255). |
+
+Invalid or contradictory replay settings stop the backend at startup with an error naming the offending variable.
 
 ### Fraud scoring
 

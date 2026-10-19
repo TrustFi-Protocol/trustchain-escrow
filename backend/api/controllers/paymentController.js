@@ -5,6 +5,74 @@ import { getAuthenticatedWalletAddress } from '../middleware/authorization.js';
 
 const STELLAR_ADDRESS_RE = /^G[A-Z2-7]{55}$/;
 
+// ── Replay protection configuration ───────────────────────────────────────────
+
+const KEY_LENGTH_LIMIT = 255;
+
+/**
+ * Validates payment submission replay protection settings.
+ * Throws one error listing every problem; messages name the setting, never its value.
+ *
+ *   PAYMENT_REPLAY_REQUIRE_IDEMPOTENCY_KEY  'true' | 'false' (default 'false')
+ *   PAYMENT_REPLAY_KEY_MIN_LENGTH           integer 1–255 (default 1)
+ *   PAYMENT_REPLAY_KEY_MAX_LENGTH           integer 1–255 (default 255)
+ *
+ * @param {Record<string, string|undefined>} [env]
+ * @returns {{ requireKey: boolean, minKeyLength: number, maxKeyLength: number }}
+ */
+export function loadReplayProtectionConfig(env = process.env) {
+  const errors = [];
+
+  const readBool = (name) => {
+    const raw = env[name];
+    if (raw === undefined || raw === '') return false;
+    if (raw === 'true' || raw === 'false') return raw === 'true';
+    errors.push(`${name} must be "true" or "false".`);
+    return false;
+  };
+
+  const readLength = (name, fallback) => {
+    const raw = env[name];
+    if (raw === undefined || raw === '') return fallback;
+    const value = Number(raw);
+    if (Number.isInteger(value) && value >= 1 && value <= KEY_LENGTH_LIMIT) return value;
+    errors.push(`${name} must be an integer between 1 and ${KEY_LENGTH_LIMIT}.`);
+    return fallback;
+  };
+
+  const config = {
+    requireKey: readBool('PAYMENT_REPLAY_REQUIRE_IDEMPOTENCY_KEY'),
+    minKeyLength: readLength('PAYMENT_REPLAY_KEY_MIN_LENGTH', 1),
+    maxKeyLength: readLength('PAYMENT_REPLAY_KEY_MAX_LENGTH', KEY_LENGTH_LIMIT),
+  };
+
+  if (config.minKeyLength > config.maxKeyLength) {
+    errors.push(
+      'PAYMENT_REPLAY_KEY_MIN_LENGTH must not exceed PAYMENT_REPLAY_KEY_MAX_LENGTH.',
+    );
+  }
+
+  if (errors.length) {
+    throw new Error(`Invalid payment replay protection configuration: ${errors.join(' ')}`);
+  }
+  return Object.freeze(config);
+}
+
+// Fail fast at startup rather than on the first payment submission.
+const replayConfig = loadReplayProtectionConfig();
+
+/** Returns an error message when the Idempotency-Key header violates the replay policy. */
+export function checkIdempotencyKey(req, config = replayConfig) {
+  const key = req.headers?.['idempotency-key'];
+  if (key === undefined || key === '') {
+    return config.requireKey ? 'Idempotency-Key header is required for payment submission' : null;
+  }
+  if (key.length < config.minKeyLength || key.length > config.maxKeyLength) {
+    return `Idempotency-Key must be between ${config.minKeyLength} and ${config.maxKeyLength} characters`;
+  }
+  return null;
+}
+
 function requireOwnedWallet(req, res) {
   const walletAddress = getAuthenticatedWalletAddress(req);
   if (!walletAddress) {
@@ -21,6 +89,9 @@ const createCheckout = async (req, res) => {
     const { address, amountUsd, escrowId } = req.body;
     const walletAddress = requireOwnedWallet(req, res);
     if (!walletAddress) return;
+
+    const replayError = checkIdempotencyKey(req);
+    if (replayError) return res.status(400).json({ error: replayError });
 
     if (!address || !STELLAR_ADDRESS_RE.test(address)) {
       return res.status(400).json({ error: 'Valid Stellar address required' });
