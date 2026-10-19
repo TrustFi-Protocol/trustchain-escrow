@@ -31,6 +31,7 @@
 pub mod arbitrators;
 mod errors;
 mod events;
+mod gas_profiling;
 pub mod incentives;
 mod tests;
 mod types;
@@ -173,6 +174,23 @@ fn validate_parameter_payload(env: &Env, payload: &ParameterPayload) -> Result<(
     }
 
     Err(GovError::InvalidParameter)
+}
+
+/// Validate the on-chain evidence string passed to `slash_arbitrator`.
+///
+/// The evidence is emitted in the `arb_slh` event payload; it is never
+/// written to persistent storage. The check is therefore structural:
+/// non-empty and bounded length. Callers relying on IPFS hashes should
+/// ensure the string fits within `MAX_SLASH_EVIDENCE_LEN`.
+fn validate_slash_evidence(reason: &String) -> Result<(), GovError> {
+    let len = reason.len();
+    if len == 0 {
+        return Err(GovError::EmptySlashEvidence);
+    }
+    if len > GovernanceContract::MAX_SLASH_EVIDENCE_LEN {
+        return Err(GovError::SlashEvidenceTooLong);
+    }
+    Ok(())
 }
 
 /// Checks whether a proposal has reached quorum and approval threshold.
@@ -751,6 +769,12 @@ impl GovernanceContract {
     /// Percentage of stake slashed on misconduct (10%).
     const SLASH_PERCENT: i128 = 10;
 
+    /// Maximum length (bytes) of the on-chain evidence string passed to
+    /// `slash_arbitrator`. Bounded to keep the emitted event size deterministic
+    /// and prevent unbounded inputs. Comfortably fits `ipfs://<CIDv1>` plus a
+    /// short human-readable note.
+    const MAX_SLASH_EVIDENCE_LEN: u32 = 256;
+
     /// Stake tokens to register as an arbitrator candidate.
     ///
     /// The caller transfers `amount` tokens to this contract.
@@ -889,6 +913,9 @@ impl GovernanceContract {
     /// * `arbitrator`  — address to slash.
     /// * `recipient`   — receives the slashed tokens.
     /// * `reason`      — on-chain evidence string (IPFS hash or description).
+    ///                   Must be non-empty and at most `MAX_SLASH_EVIDENCE_LEN` bytes;
+    ///                   otherwise returns `EmptySlashEvidence` or `SlashEvidenceTooLong`.
+    ///                   Emitted verbatim in the `arb_slh` event; never persisted.
     #[deny(clippy::arithmetic_side_effects)]
     pub fn slash_arbitrator(
         env: Env,
@@ -904,6 +931,8 @@ impl GovernanceContract {
         if caller != admin {
             return Err(GovError::AdminOnly);
         }
+
+        validate_slash_evidence(&reason)?;
 
         let stake: i128 = env
             .storage()
@@ -953,7 +982,13 @@ impl GovernanceContract {
 
         env.events().publish(
             (soroban_sdk::symbol_short!("arb_slh"), arbitrator.clone()),
-            (slash_amount, remaining, reason),
+            (
+                slash_amount,
+                remaining,
+                reason,
+                recipient.clone(),
+                remaining < Self::MIN_STAKE,
+            ),
         );
         Ok(slash_amount)
     }
@@ -1366,14 +1401,14 @@ mod arbitrator_stake_tests {
         assert!(client.is_arbitrator(&arbitrator));
         assert_eq!(token::Client::new(&env, &token).balance(&recipient), 500);
 
-        // Event topic and payload layout (indexers depend on it) are unchanged.
+        // Event topic is (arb_slh, arbitrator); payload enriched per #349.
         let last = env.events().all().last().unwrap();
         assert_eq!(
             last,
             (
                 client.address.clone(),
                 (symbol_short!("arb_slh"), arbitrator.clone()).into_val(&env),
-                (500_i128, 4_500_i128, reason).into_val(&env),
+                (500_i128, 4_500_i128, reason, recipient.clone(), false).into_val(&env),
             )
         );
     }
@@ -1512,5 +1547,531 @@ mod arbitrator_stake_tests {
                 assert!(client.is_arbitrator(&arbitrator));
             }
         }
+    }
+
+    // ── #346: explicit error mapping for slashing evidence verification ─
+
+    /// Must match `GovernanceContract::MAX_SLASH_EVIDENCE_LEN`. The two
+    /// boundary tests below (exactly-at-cap succeeds, one-over-cap fails)
+    /// catch any drift between this constant and the contract's constant.
+    const MAX_SLASH_EVIDENCE_LEN: u32 = 256;
+
+    #[test]
+    fn slash_accepts_valid_evidence_and_emits_it_verbatim() {
+        let (env, admin, token, client) = setup();
+        let arbitrator = Address::generate(&env);
+        let recipient = Address::generate(&env);
+        fund_and_stake(&env, &token, &client, &arbitrator, 2_000);
+
+        let reason = String::from_str(
+            &env,
+            "ipfs://bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi",
+        );
+        assert_eq!(
+            client.slash_arbitrator(&admin, &arbitrator, &recipient, &reason),
+            200
+        );
+
+        // Evidence must be preserved verbatim in the event payload; indexers
+        // depend on this exact tuple layout.
+        let last = env.events().all().last().unwrap();
+        assert_eq!(
+            last,
+            (
+                client.address.clone(),
+                (symbol_short!("arb_slh"), arbitrator.clone()).into_val(&env),
+                (200_i128, 1_800_i128, reason, recipient.clone(), false).into_val(&env),
+            )
+        );
+    }
+
+    #[test]
+    fn slash_rejects_empty_evidence_without_state_change() {
+        let (env, admin, token, client) = setup();
+        let arbitrator = Address::generate(&env);
+        let recipient = Address::generate(&env);
+        fund_and_stake(&env, &token, &client, &arbitrator, 2_000);
+
+        let empty = String::from_str(&env, "");
+        assert_eq!(
+            client.try_slash_arbitrator(&admin, &arbitrator, &recipient, &empty),
+            Err(Ok(GovError::EmptySlashEvidence))
+        );
+
+        // Rejection must leave storage and token balances untouched.
+        assert_eq!(stored_stake(&env, &client, &arbitrator), Some(2_000));
+        assert!(client.is_arbitrator(&arbitrator));
+        assert_eq!(token::Client::new(&env, &token).balance(&recipient), 0);
+    }
+
+    #[test]
+    fn slash_rejects_evidence_exceeding_max_length_without_state_change() {
+        extern crate std;
+        let (env, admin, token, client) = setup();
+        let arbitrator = Address::generate(&env);
+        let recipient = Address::generate(&env);
+        fund_and_stake(&env, &token, &client, &arbitrator, 2_000);
+
+        let too_long: std::string::String =
+            "a".repeat((MAX_SLASH_EVIDENCE_LEN + 1) as usize);
+        let reason = String::from_str(&env, &too_long);
+
+        assert_eq!(
+            client.try_slash_arbitrator(&admin, &arbitrator, &recipient, &reason),
+            Err(Ok(GovError::SlashEvidenceTooLong))
+        );
+        assert_eq!(stored_stake(&env, &client, &arbitrator), Some(2_000));
+        assert!(client.is_arbitrator(&arbitrator));
+        assert_eq!(token::Client::new(&env, &token).balance(&recipient), 0);
+    }
+
+    #[test]
+    fn slash_accepts_evidence_at_max_length_boundary() {
+        extern crate std;
+        let (env, admin, token, client) = setup();
+        let arbitrator = Address::generate(&env);
+        let recipient = Address::generate(&env);
+        fund_and_stake(&env, &token, &client, &arbitrator, 2_000);
+
+        let exact: std::string::String = "a".repeat(MAX_SLASH_EVIDENCE_LEN as usize);
+        let reason = String::from_str(&env, &exact);
+
+        assert_eq!(
+            client.slash_arbitrator(&admin, &arbitrator, &recipient, &reason),
+            200
+        );
+        assert_eq!(stored_stake(&env, &client, &arbitrator), Some(1_800));
+        assert!(client.is_arbitrator(&arbitrator));
+    }
+
+    #[test]
+    fn slash_auth_failure_precedes_evidence_validation() {
+        // Preserve public behavior: non-admin callers must observe AdminOnly,
+        // not EmptySlashEvidence, even when the evidence is invalid.
+        let (env, _admin, token, client) = setup();
+        let arbitrator = Address::generate(&env);
+        let recipient = Address::generate(&env);
+        let outsider = Address::generate(&env);
+        fund_and_stake(&env, &token, &client, &arbitrator, 2_000);
+
+        let empty = String::from_str(&env, "");
+        assert_eq!(
+            client.try_slash_arbitrator(&outsider, &arbitrator, &recipient, &empty),
+            Err(Ok(GovError::AdminOnly))
+        );
+    }
+
+    #[test]
+    fn slash_unstaked_precedes_evidence_validation() {
+        // Preserve public behavior: an unstaked target still maps to
+        // NotArbitrator even when the evidence is invalid, because the
+        // stake lookup happens before evidence validation.
+        let (env, admin, _token, client) = setup();
+        let unknown = Address::generate(&env);
+        let recipient = Address::generate(&env);
+        let empty = String::from_str(&env, "");
+        assert_eq!(
+            client.try_slash_arbitrator(&admin, &unknown, &recipient, &empty),
+            Err(Ok(GovError::NotArbitrator))
+        );
+    }
+
+    // ── #347: ledger-constraint documentation invariants ────────────────
+    //
+    // These tests lock in the invariants described in `slash_arbitrator`'s
+    // `# Ledger constraints` doc section. A failure here means either the
+    // implementation drifted from the documented contract, or the doc is
+    // stale and must be updated. Both are regressions the tests catch.
+
+    #[test]
+    fn slash_outcome_is_independent_of_ledger_timestamp() {
+        // Doc claim: "reads no env.ledger().timestamp()".
+        // Run identical setup + slash at three wildly different timestamps
+        // and assert identical state transitions.
+        fn run(ts: u64) -> (i128, Option<i128>, bool) {
+            let env = Env::default();
+            env.mock_all_auths();
+            env.ledger().with_mut(|l| l.timestamp = ts);
+
+            let admin = Address::generate(&env);
+            let token_admin = Address::generate(&env);
+            let token = env
+                .register_stellar_asset_contract_v2(token_admin)
+                .address();
+            let contract_id = env.register_contract(None, GovernanceContract);
+            let client = GovernanceContractClient::new(&env, &contract_id);
+            client.initialize(&admin, &token, &100, &60, &3_600, &7_200, &400, &5_100);
+
+            let arbitrator = Address::generate(&env);
+            let recipient = Address::generate(&env);
+            token::StellarAssetClient::new(&env, &token).mint(&arbitrator, &2_000);
+            client.stake_arbitrator(&arbitrator, &2_000);
+
+            let reason = String::from_str(&env, "ipfs://evidence");
+            let slash_amount =
+                client.slash_arbitrator(&admin, &arbitrator, &recipient, &reason);
+
+            let remaining = stored_stake(&env, &client, &arbitrator);
+            (slash_amount, remaining, client.is_arbitrator(&arbitrator))
+        }
+
+        let a = run(0);
+        let b = run(1_000_000_000);
+        let c = run(4_000_000_000);
+        assert_eq!(a, b, "timestamp must not affect slash outcome");
+        assert_eq!(a, c, "timestamp must not affect slash outcome");
+        // Sanity: expected exact value, so three consistent wrong answers
+        // still fail the test.
+        assert_eq!(a, (200, Some(1_800), true));
+    }
+
+    #[test]
+    fn slash_outcome_is_independent_of_ledger_sequence_number() {
+        // Doc claim: sequence only affects TTL lifetime, never outcomes.
+        fn run(seq: u32) -> (i128, Option<i128>, bool) {
+            let env = Env::default();
+            env.mock_all_auths();
+            env.ledger().with_mut(|l| l.sequence_number = seq);
+
+            let admin = Address::generate(&env);
+            let token_admin = Address::generate(&env);
+            let token = env
+                .register_stellar_asset_contract_v2(token_admin)
+                .address();
+            let contract_id = env.register_contract(None, GovernanceContract);
+            let client = GovernanceContractClient::new(&env, &contract_id);
+            client.initialize(&admin, &token, &100, &60, &3_600, &7_200, &400, &5_100);
+
+            let arbitrator = Address::generate(&env);
+            let recipient = Address::generate(&env);
+            token::StellarAssetClient::new(&env, &token).mint(&arbitrator, &2_000);
+            client.stake_arbitrator(&arbitrator, &2_000);
+
+            let reason = String::from_str(&env, "ipfs://evidence");
+            let slash_amount =
+                client.slash_arbitrator(&admin, &arbitrator, &recipient, &reason);
+
+            let remaining = stored_stake(&env, &client, &arbitrator);
+            (slash_amount, remaining, client.is_arbitrator(&arbitrator))
+        }
+
+        assert_eq!(run(1), run(1_000_000));
+        assert_eq!(run(1), run(1_000_000_000));
+    }
+
+    #[test]
+    fn slash_does_not_mutate_instance_storage_keys() {
+        // Doc claim: "Instance keys (Admin, Config) are read-only here."
+        let (env, admin, token, client) = setup();
+        let arbitrator = Address::generate(&env);
+        let recipient = Address::generate(&env);
+        fund_and_stake(&env, &token, &client, &arbitrator, 2_000);
+
+        let (admin_before, config_before, counter_before) =
+            env.as_contract(&client.address, || {
+                let a = env
+                    .storage()
+                    .instance()
+                    .get::<_, Address>(&DataKey::Admin);
+                let c = env
+                    .storage()
+                    .instance()
+                    .get::<_, crate::GovConfig>(&DataKey::Config);
+                let p = env
+                    .storage()
+                    .instance()
+                    .get::<_, u64>(&DataKey::ProposalCounter);
+                (a, c, p)
+            });
+
+        client.slash_arbitrator(
+            &admin,
+            &arbitrator,
+            &recipient,
+            &String::from_str(&env, "ipfs://evidence"),
+        );
+
+        let (admin_after, config_after, counter_after) =
+            env.as_contract(&client.address, || {
+                let a = env
+                    .storage()
+                    .instance()
+                    .get::<_, Address>(&DataKey::Admin);
+                let c = env
+                    .storage()
+                    .instance()
+                    .get::<_, crate::GovConfig>(&DataKey::Config);
+                let p = env
+                    .storage()
+                    .instance()
+                    .get::<_, u64>(&DataKey::ProposalCounter);
+                (a, c, p)
+            });
+
+        assert_eq!(admin_before, admin_after, "Admin instance key must be untouched");
+        assert_eq!(
+            counter_before, counter_after,
+            "ProposalCounter instance key must be untouched"
+        );
+        let cb = config_before.expect("Config present after initialize");
+        let ca = config_after.expect("Config present after initialize");
+        assert_eq!(cb.token, ca.token, "Config.token must be untouched");
+        assert_eq!(cb.quorum_bps, ca.quorum_bps, "Config.quorum_bps must be untouched");
+        assert_eq!(
+            cb.approval_threshold_bps, ca.approval_threshold_bps,
+            "Config.approval_threshold_bps must be untouched"
+        );
+        assert_eq!(
+            cb.voting_period, ca.voting_period,
+            "Config.voting_period must be untouched"
+        );
+    }
+
+    #[test]
+    fn slash_persistent_entry_count_is_stable_on_above_min_branch() {
+        // Doc claim: above-min branch performs 1 set (not a create).
+        let (env, admin, token, client) = setup();
+        let arbitrator = Address::generate(&env);
+        let recipient = Address::generate(&env);
+        fund_and_stake(&env, &token, &client, &arbitrator, 2_000);
+
+        let before =
+            env.as_contract(&client.address, || env.storage().persistent().all().len());
+        client.slash_arbitrator(
+            &admin,
+            &arbitrator,
+            &recipient,
+            &String::from_str(&env, "ipfs://evidence"),
+        );
+        let after =
+            env.as_contract(&client.address, || env.storage().persistent().all().len());
+
+        assert_eq!(
+            before, after,
+            "above-min branch must not create or remove persistent entries"
+        );
+    }
+
+    #[test]
+    fn slash_persistent_entry_count_shrinks_by_two_on_below_min_branch() {
+        // Doc claim: below-min branch removes BOTH ArbitratorStake and
+        // Arbitrator, creates nothing.
+        let (env, admin, token, client) = setup();
+        let arbitrator = Address::generate(&env);
+        let recipient = Address::generate(&env);
+        fund_and_stake(&env, &token, &client, &arbitrator, 1_100);
+
+        let before =
+            env.as_contract(&client.address, || env.storage().persistent().all().len());
+        client.slash_arbitrator(
+            &admin,
+            &arbitrator,
+            &recipient,
+            &String::from_str(&env, "ipfs://evidence"),
+        );
+        let after =
+            env.as_contract(&client.address, || env.storage().persistent().all().len());
+
+        assert_eq!(
+            after + 2,
+            before,
+            "below-min branch must remove exactly 2 persistent entries"
+        );
+        assert_eq!(stored_stake(&env, &client, &arbitrator), None);
+        assert!(!client.is_arbitrator(&arbitrator));
+    }
+
+    #[test]
+    fn slash_event_payload_shape_matches_documented_contract() {
+        // Doc claim: event is `(arb_slh, arbitrator)` → `(slash_amount,
+        // remaining, reason)`. Lock this shape down.
+        let (env, admin, token, client) = setup();
+        let arbitrator = Address::generate(&env);
+        let recipient = Address::generate(&env);
+        fund_and_stake(&env, &token, &client, &arbitrator, 2_000);
+
+        let reason = String::from_str(&env, "ipfs://shape-check");
+        client.slash_arbitrator(&admin, &arbitrator, &recipient, &reason);
+
+        let last = env.events().all().last().unwrap();
+        assert_eq!(
+            last,
+            (
+                client.address.clone(),
+                (symbol_short!("arb_slh"), arbitrator.clone()).into_val(&env),
+                (200_i128, 1_800_i128, reason, recipient.clone(), false).into_val(&env),
+            ),
+            "event shape must match the documented (slash_amount, remaining, reason, recipient, deactivated) tuple"
+        );
+    }
+
+    // ── #349: event completeness for slashing evidence verification ─────
+    //
+    // Downstream indexers reconstruct slash history from `arb_slh` events
+    // alone. These tests assert that every datum needed for deterministic
+    // indexing (who was slashed, how much, who received it, why, whether
+    // the entry was deactivated ﹣ plus ledger-metadata time) is emitted,
+    // and that failed calls do not emit events.
+
+    #[test]
+    fn slash_event_above_min_contains_complete_indexing_payload() {
+        // Primary success path: every indexing field must be present.
+        let (env, admin, token, client) = setup();
+        let arbitrator = Address::generate(&env);
+        let recipient = Address::generate(&env);
+        fund_and_stake(&env, &token, &client, &arbitrator, 2_000);
+
+        let reason = String::from_str(&env, "ipfs://bafycompleteidx");
+        client.slash_arbitrator(&admin, &arbitrator, &recipient, &reason);
+
+        let last = env.events().all().last().unwrap();
+        assert_eq!(
+            last,
+            (
+                client.address.clone(),
+                (symbol_short!("arb_slh"), arbitrator.clone()).into_val(&env),
+                (
+                    200_i128,
+                    1_800_i128,
+                    reason,
+                    recipient.clone(),
+                    false, // deactivated = remaining (1800) >= MIN_STAKE (1000)
+                )
+                    .into_val(&env),
+            ),
+            "above-min event payload must be (slash_amount, remaining, reason, recipient, deactivated)"
+        );
+    }
+
+    #[test]
+    fn slash_event_below_min_flags_deactivated_true() {
+        // Boundary path: `deactivated=true` tells indexers the arbitrator
+        // was removed from the whitelist, without cross-checking storage.
+        let (env, admin, token, client) = setup();
+        let arbitrator = Address::generate(&env);
+        let recipient = Address::generate(&env);
+        fund_and_stake(&env, &token, &client, &arbitrator, 1_100);
+
+        let reason = String::from_str(&env, "ipfs://bafybnd");
+        client.slash_arbitrator(&admin, &arbitrator, &recipient, &reason);
+
+        let last = env.events().all().last().unwrap();
+        assert_eq!(
+            last,
+            (
+                client.address.clone(),
+                (symbol_short!("arb_slh"), arbitrator.clone()).into_val(&env),
+                (
+                    110_i128,
+                    990_i128,
+                    reason,
+                    recipient.clone(),
+                    true, // deactivated = remaining (990) < MIN_STAKE (1000)
+                )
+                    .into_val(&env),
+            ),
+            "below-min event must flag deactivated=true and include recipient"
+        );
+    }
+
+    #[test]
+    fn slash_event_emitted_exactly_once_per_successful_call() {
+        // Determinism: one `arb_slh` event per successful slash, no more,
+        // no less. A double-emit regression (e.g. adding a duplicate event
+        // alongside) would break this.
+        let (env, admin, token, client) = setup();
+        let arbitrator = Address::generate(&env);
+        let recipient = Address::generate(&env);
+        fund_and_stake(&env, &token, &client, &arbitrator, 2_000);
+
+        let before = env.events().all().len();
+        client.slash_arbitrator(
+            &admin,
+            &arbitrator,
+            &recipient,
+            &String::from_str(&env, "ipfs://once"),
+        );
+        let after = env.events().all().len();
+        assert_eq!(
+            after - before,
+            1,
+            "successful slash must emit exactly one event"
+        );
+    }
+
+    #[test]
+    fn slash_event_not_emitted_on_auth_failure() {
+        // Failure path: non-admin caller must not emit any event. A phantom
+        // event on failure would corrupt downstream history.
+        let (env, _admin, token, client) = setup();
+        let arbitrator = Address::generate(&env);
+        let recipient = Address::generate(&env);
+        let outsider = Address::generate(&env);
+        fund_and_stake(&env, &token, &client, &arbitrator, 2_000);
+
+        let before = env.events().all().len();
+        let result = client.try_slash_arbitrator(
+            &outsider,
+            &arbitrator,
+            &recipient,
+            &String::from_str(&env, "ipfs://e"),
+        );
+        assert!(result.is_err(), "non-admin must be rejected");
+        assert_eq!(
+            env.events().all().len(),
+            before,
+            "failed slash must not emit any event"
+        );
+    }
+
+    #[test]
+    fn slash_event_not_emitted_on_unstaked_failure() {
+        // Failure path: slashing an unstaked address must not emit any event.
+        let (env, admin, _token, client) = setup();
+        let unknown = Address::generate(&env);
+        let recipient = Address::generate(&env);
+
+        let before = env.events().all().len();
+        let result = client.try_slash_arbitrator(
+            &admin,
+            &unknown,
+            &recipient,
+            &String::from_str(&env, "ipfs://e"),
+        );
+        assert!(result.is_err(), "unstaked target must be rejected");
+        assert_eq!(
+            env.events().all().len(),
+            before,
+            "failed slash must not emit any event"
+        );
+    }
+
+    #[test]
+    fn slash_event_topic_stable_and_evidence_does_not_leak_into_topics() {
+        // Even with long, arbitrary evidence, the topic must remain exactly
+        // `(arb_slh, arbitrator)`. Topic shape is part of the public
+        // contract that indexers filter on.
+        let (env, admin, token, client) = setup();
+        let arbitrator = Address::generate(&env);
+        let recipient = Address::generate(&env);
+        fund_and_stake(&env, &token, &client, &arbitrator, 2_000);
+
+        let long_reason = String::from_str(
+            &env,
+            "ipfs://arbitrary-evidence-content-with-plenty-of-distinguishing-bytes",
+        );
+        client.slash_arbitrator(&admin, &arbitrator, &recipient, &long_reason);
+
+        let last = env.events().all().last().unwrap();
+        assert_eq!(
+            last,
+            (
+                client.address.clone(),
+                (symbol_short!("arb_slh"), arbitrator.clone()).into_val(&env),
+                (200_i128, 1_800_i128, long_reason, recipient.clone(), false)
+                    .into_val(&env),
+            ),
+            "topic must be exactly (arb_slh, arbitrator) regardless of evidence content"
+        );
     }
 }

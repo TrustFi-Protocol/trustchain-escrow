@@ -56,4 +56,11 @@ pub enum GovError {
 
     // Arithmetic
     ArithmeticOverflow = 35,
+
+    // Slashing evidence (issue #346)
+    /// `slash_arbitrator` was called with an empty evidence string.
+    EmptySlashEvidence = 36,
+    /// `slash_arbitrator` was called with evidence longer than
+    /// `MAX_SLASH_EVIDENCE_LEN`.
+    SlashEvidenceTooLong = 37,
 }
