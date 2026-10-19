@@ -5,7 +5,11 @@
 import express from 'express';
 import adminAuth from '../middleware/adminAuth.js';
 import incidentController from '../controllers/incidentController.js';
+import { validateIncidentNotificationConfig } from '../../services/incidentService.js';
 import { idempotencyMiddleware } from '../../lib/idempotency.js';
+
+// Fail fast at startup on invalid or contradictory notification settings.
+validateIncidentNotificationConfig();
 
 const router = express.Router();
 router.use(adminAuth);

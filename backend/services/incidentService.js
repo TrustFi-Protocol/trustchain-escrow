@@ -21,6 +21,11 @@
  *   SLACK_INCIDENT_WEBHOOK  — Slack incoming webhook URL
  *   ONCALL_SCHEDULE         — JSON array of on-call entries (see below)
  *   INCIDENT_ALERT_EMAIL    — email address for incident notifications
+ *   INCIDENT_NOTIFY_TIMEOUT_MS — per-channel notification timeout (100–60000, default 5000)
+ *   RUNBOOK_BASE_URL        — base URL for default runbooks
+ *
+ * Settings are validated by validateIncidentNotificationConfig(), which the
+ * incident routes call at load time so misconfiguration fails fast.
  *
  * @module incidentService
  */
@@ -36,8 +41,113 @@ import { createModuleLogger } from '../config/logger.js';
 
 const log = createModuleLogger('incidentService');
 
-/** Upper bound for a single optional notification channel call. */
-const NOTIFY_TIMEOUT_MS = 5000;
+/** Default upper bound for a single optional notification channel call. */
+const DEFAULT_NOTIFY_TIMEOUT_MS = 5000;
+const MIN_NOTIFY_TIMEOUT_MS = 100;
+const MAX_NOTIFY_TIMEOUT_MS = 60000;
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+const isUrl = (value, protocols) => {
+  try {
+    return protocols.includes(new URL(value).protocol);
+  } catch {
+    return false;
+  }
+};
+
+/**
+ * Validates incident notification runtime settings and returns the
+ * normalized config. Throws a single error listing every problem with an
+ * actionable fix. Messages name the variable only — never its value — so
+ * routing keys and webhook URLs are not leaked.
+ *
+ * @param {NodeJS.ProcessEnv} [env]
+ * @returns {{ pagerDutyEnabled: boolean, slackEnabled: boolean, timeoutMs: number, onCallEntries: number }}
+ */
+export function validateIncidentNotificationConfig(env = process.env) {
+  const errors = [];
+  const pdKey = env.PAGERDUTY_ROUTING_KEY;
+  const slackUrl = env.SLACK_INCIDENT_WEBHOOK;
+
+  if (pdKey !== undefined && pdKey !== '' && !/^[A-Za-z0-9]{20,64}$/.test(pdKey)) {
+    errors.push(
+      'PAGERDUTY_ROUTING_KEY must be a 20-64 character alphanumeric Events API v2 integration key, or unset to disable PagerDuty',
+    );
+  }
+  if (slackUrl !== undefined && slackUrl !== '' && !isUrl(slackUrl, ['https:'])) {
+    errors.push('SLACK_INCIDENT_WEBHOOK must be an https:// URL, or unset to disable Slack');
+  }
+  if (env.INCIDENT_ALERT_EMAIL && !EMAIL_RE.test(env.INCIDENT_ALERT_EMAIL)) {
+    errors.push('INCIDENT_ALERT_EMAIL must be a valid email address, or unset');
+  }
+  if (env.RUNBOOK_BASE_URL && !isUrl(env.RUNBOOK_BASE_URL, ['https:', 'http:'])) {
+    errors.push('RUNBOOK_BASE_URL must be an http(s):// URL, or unset to use the default');
+  }
+
+  let timeoutMs = DEFAULT_NOTIFY_TIMEOUT_MS;
+  if (env.INCIDENT_NOTIFY_TIMEOUT_MS !== undefined && env.INCIDENT_NOTIFY_TIMEOUT_MS !== '') {
+    timeoutMs = Number(env.INCIDENT_NOTIFY_TIMEOUT_MS);
+    if (
+      !Number.isInteger(timeoutMs) ||
+      timeoutMs < MIN_NOTIFY_TIMEOUT_MS ||
+      timeoutMs > MAX_NOTIFY_TIMEOUT_MS
+    ) {
+      errors.push(
+        `INCIDENT_NOTIFY_TIMEOUT_MS must be an integer between ${MIN_NOTIFY_TIMEOUT_MS} and ${MAX_NOTIFY_TIMEOUT_MS}`,
+      );
+    }
+  }
+
+  let onCallEntries = 0;
+  if (env.ONCALL_SCHEDULE) {
+    let schedule;
+    try {
+      schedule = JSON.parse(env.ONCALL_SCHEDULE);
+    } catch {
+      errors.push('ONCALL_SCHEDULE must be valid JSON');
+    }
+    if (schedule !== undefined && !Array.isArray(schedule)) {
+      errors.push('ONCALL_SCHEDULE must be a JSON array of { name, email, startUtc, endUtc }');
+    } else if (Array.isArray(schedule)) {
+      onCallEntries = schedule.length;
+      schedule.forEach((entry, i) => {
+        const start = Date.parse(entry?.startUtc);
+        const end = Date.parse(entry?.endUtc);
+        if (!entry?.name || !EMAIL_RE.test(entry?.email ?? '')) {
+          errors.push(`ONCALL_SCHEDULE[${i}] requires a name and a valid email`);
+        }
+        if (Number.isNaN(start) || Number.isNaN(end)) {
+          errors.push(`ONCALL_SCHEDULE[${i}] startUtc and endUtc must be ISO-8601 timestamps`);
+        } else if (end <= start) {
+          errors.push(`ONCALL_SCHEDULE[${i}] endUtc must be after startUtc`);
+        }
+      });
+    }
+  }
+
+  if (errors.length > 0) {
+    const err = new Error(
+      `Invalid incident notification configuration:\n - ${errors.join('\n - ')}`,
+    );
+    err.code = 'INCIDENT_CONFIG_INVALID';
+    err.errors = errors;
+    throw err;
+  }
+
+  return {
+    pagerDutyEnabled: Boolean(pdKey),
+    slackEnabled: Boolean(slackUrl),
+    timeoutMs,
+    onCallEntries,
+  };
+}
+
+function notifyTimeoutMs() {
+  const value = Number(process.env.INCIDENT_NOTIFY_TIMEOUT_MS);
+  return Number.isInteger(value) && value >= MIN_NOTIFY_TIMEOUT_MS && value <= MAX_NOTIFY_TIMEOUT_MS
+    ? value
+    : DEFAULT_NOTIFY_TIMEOUT_MS;
+}
 
 /**
  * Channel outcome values. Optional infrastructure that is not configured is
@@ -195,7 +305,7 @@ async function postNotification(channel, url, body) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
-      signal: AbortSignal.timeout(NOTIFY_TIMEOUT_MS),
+      signal: AbortSignal.timeout(notifyTimeoutMs()),
     });
     if (!res.ok) {
       log.warn({ msg: 'incident_notification_failed', channel, statusCode: res.status });
@@ -655,6 +765,7 @@ export default {
   getCurrentOnCall,
   getOnCallSchedule,
   getNotificationStatus,
+  validateIncidentNotificationConfig,
   ChannelStatus,
   Severity,
   Status,
