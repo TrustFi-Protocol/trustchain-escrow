@@ -20,6 +20,7 @@ const createIncident = async (req, res) => {
       affectedServices: affectedServices ?? [],
       commander,
       runbookUrl,
+      idempotencyKey: req.headers['idempotency-key'],
       createdBy: req.user?.address ?? req.headers['x-admin-api-key']?.slice(0, 8) ?? 'admin',
     });
     res.status(201).json(incident);

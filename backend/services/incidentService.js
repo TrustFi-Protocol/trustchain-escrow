@@ -27,6 +27,7 @@
 
 import crypto from 'crypto';
 import webhookService from './webhookService.js';
+import { BoundedRetentionStore, createSingleFlight } from '../lib/operationalControls.js';
 
 // ── Types / constants ─────────────────────────────────────────────────────────
 
@@ -62,6 +63,15 @@ const TRANSITIONS = {
 
 /** @type {Map<string, Incident>} */
 const incidents = new Map();
+
+// ── Idempotency state ─────────────────────────────────────────────────────────
+
+/** idempotency key -> incident id, so retried creates return the original. */
+const createRequests = new BoundedRetentionStore(1000);
+/** notification keys already routed, so retries never re-page or re-post. */
+const routedNotifications = new BoundedRetentionStore(5000);
+const createFlight = createSingleFlight();
+const notificationFlight = createSingleFlight();
 
 // ── On-call rotation ──────────────────────────────────────────────────────────
 
@@ -294,6 +304,24 @@ async function emitIncidentWebhook(eventType, incident, extra = {}) {
   }
 }
 
+/**
+ * Routes alert + webhook notifications for one incident state change exactly
+ * once. The key is derived from the incident id, event type and timeline
+ * position, so retries and overlapping callers for the same state change are
+ * coalesced instead of paging twice.
+ */
+async function routeIncidentNotification(eventType, incident, { alertAction, message, extra }) {
+  const key = `${incident.id}:${eventType}:${incident.timeline.length}`;
+  return notificationFlight(key, async () => {
+    if (routedNotifications.get(key)) return routedNotifications.get(key);
+    if (alertAction) await dispatchAlerts(alertAction, incident, message);
+    await emitIncidentWebhook(eventType, incident, extra);
+    const record = { key, eventType, routed: true };
+    routedNotifications.set(key, record);
+    return record;
+  });
+}
+
 // ── Incident CRUD ─────────────────────────────────────────────────────────────
 
 /**
@@ -320,16 +348,29 @@ async function emitIncidentWebhook(eventType, incident, extra = {}) {
  * @param {object} params
  * @returns {Promise<Incident>}
  */
-export async function createIncident({
-  title,
-  description,
-  severity = Severity.SEV3,
-  affectedServices = [],
-  affectedEscrowIds = [],
-  commander,
-  runbookUrl,
-  createdBy,
-}) {
+export async function createIncident(params = {}) {
+  const key = typeof params.idempotencyKey === 'string' ? params.idempotencyKey.trim() : '';
+  if (!key) return createIncidentOnce(params);
+  return createFlight(key, async () => {
+    const existingId = createRequests.get(key);
+    if (existingId && incidents.has(existingId)) return incidents.get(existingId);
+    return createIncidentOnce(params, key);
+  });
+}
+
+async function createIncidentOnce(
+  {
+    title,
+    description,
+    severity = Severity.SEV3,
+    affectedServices = [],
+    affectedEscrowIds = [],
+    commander,
+    runbookUrl,
+    createdBy,
+  },
+  idempotencyKey,
+) {
   const id = `INC-${Date.now()}-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
   const now = new Date().toISOString();
 
@@ -359,12 +400,13 @@ export async function createIncident({
   };
 
   incidents.set(id, incident);
+  if (idempotencyKey) createRequests.set(idempotencyKey, id);
   console.error(`[Incident] ${id} CREATED severity=${severity} title="${title}"`);
 
-  await dispatchAlerts('trigger', incident);
-
-  // Emit webhook for incident opened
-  await emitIncidentWebhook('incident.opened', incident, { action: 'opened' });
+  await routeIncidentNotification('incident.opened', incident, {
+    alertAction: 'trigger',
+    extra: { action: 'opened' },
+  });
 
   return incident;
 }
@@ -405,14 +447,15 @@ export async function updateIncidentStatus(id, newStatus, { actor = 'system', no
         ? 'resolve'
         : 'update';
 
-  await dispatchAlerts(pdAction, incident, note || undefined);
-
-  // Emit status change webhooks
-  if (newStatus === Status.RESOLVED || newStatus === Status.CLOSED) {
-    await emitIncidentWebhook('incident.resolved', incident, { actor, note, status: newStatus });
-  } else {
-    await emitIncidentWebhook('incident.updated', incident, { actor, note, status: newStatus });
-  }
+  const eventType =
+    newStatus === Status.RESOLVED || newStatus === Status.CLOSED
+      ? 'incident.resolved'
+      : 'incident.updated';
+  await routeIncidentNotification(eventType, incident, {
+    alertAction: pdAction,
+    message: note || undefined,
+    extra: { actor, note, status: newStatus },
+  });
 
   console.log(`[Incident] ${id} → ${newStatus} by ${actor}`);
   return incident;
@@ -441,6 +484,10 @@ export async function linkEscrowsToIncident(id, escrowIds = [], { actor = 'syste
     }
   }
 
+  // Retried link requests that add nothing new are a no-op: no timeline entry,
+  // no second notification.
+  if (newlyLinked.length === 0) return incident;
+
   incident.affectedEscrowIds = Array.from(existingEscrows);
   const now = new Date().toISOString();
   incident.updatedAt = now;
@@ -454,12 +501,9 @@ export async function linkEscrowsToIncident(id, escrowIds = [], { actor = 'syste
 
   console.log(`[Incident] ${id}: linked ${newlyLinked.length} new escrows`);
 
-  // Emit webhook for escrow linking
-  await emitIncidentWebhook('incident.escrows_linked', incident, {
-    linkedEscrowIds: normalizedIds,
-    newlyLinked,
-    actor,
-    note,
+  await routeIncidentNotification('incident.escrows_linked', incident, {
+    alertAction: null,
+    extra: { linkedEscrowIds: normalizedIds, newlyLinked, actor, note },
   });
 
   return incident;
@@ -533,6 +577,8 @@ function resolvedRunbookUrl(severity) {
  */
 export function __resetForTests() {
   incidents.clear();
+  createRequests.entries.clear();
+  routedNotifications.entries.clear();
 }
 
 export default {
