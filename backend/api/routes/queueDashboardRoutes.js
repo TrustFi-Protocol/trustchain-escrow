@@ -19,74 +19,185 @@ import {
 const router = express.Router();
 
 /**
+ * Validate queue-health-only configuration at module initialization.
+ * Other queue routes retain their existing behavior.
+ */
+export function validateQueueHealthConfig(env = process.env) {
+  const parseNumber = (name, fallback, min, max, integer = false) => {
+    const raw = env[name];
+    const value = raw === undefined ? fallback : Number(raw);
+    if (
+      (raw !== undefined && String(raw).trim() === '') ||
+      !Number.isFinite(value) ||
+      value < min ||
+      value > max ||
+      (integer && !Number.isInteger(value))
+    ) {
+      throw new Error(`Invalid queue health configuration: ${name} must be ${integer ? 'an integer' : 'a number'} between ${min} and ${max}`);
+    }
+    return value;
+  };
+  const parseBoolean = (name, fallback) => {
+    const raw = env[name];
+    if (raw === undefined) return fallback;
+    if (raw === 'true') return true;
+    if (raw === 'false') return false;
+    throw new Error(`Invalid queue health configuration: ${name} must be true or false`);
+  };
+
+  const failureRateThreshold = parseNumber('QUEUE_HEALTH_FAILURE_RATE_THRESHOLD', 5, 0, 100);
+  const timeoutMs = parseNumber('QUEUE_HEALTH_TIMEOUT_MS', 2000, 100, 30000, true);
+  const allowDegraded = parseBoolean('QUEUE_HEALTH_ALLOW_DEGRADED', true);
+  const requireRedis = parseBoolean('QUEUE_HEALTH_REDIS_REQUIRED', false);
+
+  if (allowDegraded && requireRedis) {
+    throw new Error('Invalid queue health configuration: QUEUE_HEALTH_REDIS_REQUIRED=true conflicts with QUEUE_HEALTH_ALLOW_DEGRADED=true; set QUEUE_HEALTH_ALLOW_DEGRADED=false');
+  }
+
+  return Object.freeze({ failureRateThreshold, timeoutMs, allowDegraded, requireRedis });
+}
+
+const queueHealthConfig = validateQueueHealthConfig();
+let inFlightHealthSnapshot = null;
+
+function safeRedisDetails(info) {
+  let values = info;
+  if (typeof info === 'string') {
+    values = Object.fromEntries(
+      info.split(/\r?\n/)
+        .filter((line) => /^(redis_version|used_memory_human|connected_clients):/.test(line))
+        .map((line) => {
+          const separator = line.indexOf(':');
+          return [line.slice(0, separator), line.slice(separator + 1)];
+        }),
+    );
+  }
+  if (!values || typeof values !== 'object') values = {};
+  return {
+    version: values.redis_version ?? null,
+    usedMemory: values.used_memory_human ?? null,
+    connectedClients: values.connected_clients ?? null,
+  };
+}
+
+function publicJob(job, failed = false) {
+  return {
+    id: String(job.id),
+    name: String(job.name ?? 'queue-job'),
+    ...(failed ? { failedReason: 'Job failed (details redacted)' } : {}),
+  };
+}
+
+async function collectQueueHealthSnapshot() {
+  const probes = [
+    ['mainQueue.counts', () => stellarEventsQueue.getJobCounts()],
+    ['deadLetterQueue.counts', () => deadLetterQueue.getJobCounts()],
+    ['mainQueue.waiting', () => stellarEventsQueue.getWaiting()],
+    ['mainQueue.active', () => stellarEventsQueue.getActive()],
+    ['mainQueue.completed', () => stellarEventsQueue.getCompleted()],
+    ['mainQueue.failed', () => stellarEventsQueue.getFailed()],
+    ['deadLetterQueue.waiting', () => deadLetterQueue.getWaiting()],
+    ['deadLetterQueue.active', () => deadLetterQueue.getActive()],
+    ['redis', () => connection.info()],
+  ];
+
+  // allSettled prevents optional Redis failures from hiding otherwise useful metrics.
+  // The overall deadline prevents an unreachable queue from hanging /stats forever.
+  let timeout;
+  const results = await Promise.race([
+    Promise.allSettled(probes.map(([, read]) => Promise.resolve().then(read))),
+    new Promise((resolve) => {
+      timeout = setTimeout(() => resolve(null), queueHealthConfig.timeoutMs);
+    }),
+  ]);
+  clearTimeout(timeout);
+
+  const degradedComponents = results
+    ? probes.filter((_, i) => results[i].status === 'rejected').map(([name]) => name)
+    : ['timeout'];
+  const value = (i, fallback) =>
+    results?.[i]?.status === 'fulfilled' ? results[i].value : fallback;
+  const mainCounts = value(0, {});
+  const deadCounts = value(1, {});
+  const waiting = value(2, []);
+  const active = value(3, []);
+  const completed = value(4, []);
+  const failed = value(5, []);
+  const deadWaiting = value(6, []);
+  const deadActive = value(7, []);
+  const redisConnected = connection.status === 'ready' && results?.[8]?.status === 'fulfilled';
+
+  if (!redisConnected && !degradedComponents.includes('redis')) {
+    degradedComponents.push('redis');
+  }
+  if ((queueHealthConfig.requireRedis && !redisConnected) ||
+      (!queueHealthConfig.allowDegraded && degradedComponents.length > 0)) {
+    throw new Error('Queue health reporting is unavailable');
+  }
+
+  // Capture metrics once per snapshot: concurrent requests receive identical results.
+  const failureRate = queueMetrics.getFailureRate();
+  const successRate = queueMetrics.getSuccessRate();
+  const stats = {
+    status: degradedComponents.length ? 'degraded' : 'ok',
+    degradedComponents,
+    timestamp: new Date().toISOString(),
+    uptime: process.uptime(),
+    metrics: {
+      totalJobs: queueMetrics.totalJobs,
+      completedJobs: queueMetrics.completedJobs,
+      failedJobs: queueMetrics.failedJobs,
+      retryCount: queueMetrics.retryCount,
+      deadLetterCount: queueMetrics.deadLetterCount,
+      failureRate,
+      successRate,
+      processingTime: queueMetrics.getProcessingTime(),
+    },
+    mainQueue: {
+      ...mainCounts,
+      waitingJobs: waiting.length,
+      activeJobs: active.length,
+      recentCompleted: completed.slice(-10).map((job) => publicJob(job)),
+      recentFailed: failed.slice(-10).map((job) => publicJob(job, true)),
+    },
+    deadLetterQueue: {
+      ...deadCounts,
+      waitingJobs: deadWaiting.length,
+      activeJobs: deadActive.length,
+    },
+    redis: {
+      connected: Boolean(redisConnected),
+      ...safeRedisDetails(redisConnected ? value(8, null) : null),
+    },
+    alerts: {
+      highFailureRate: failureRate > queueHealthConfig.failureRateThreshold,
+      redisConnected: Boolean(redisConnected),
+      queueProcessingActive: active.length > 0,
+    },
+  };
+  return stats;
+}
+
+function getQueueHealthSnapshot() {
+  // A GET has no write side effects. Share only *overlapping* reads so retries
+  // cannot duplicate the same expensive probes; later requests refresh normally.
+  if (!inFlightHealthSnapshot) {
+    inFlightHealthSnapshot = collectQueueHealthSnapshot().finally(() => {
+      inFlightHealthSnapshot = null;
+    });
+  }
+  return inFlightHealthSnapshot;
+}
+
+/**
  * Get comprehensive queue statistics
  */
-router.get('/stats', async (req, res) => {
+router.get('/stats', async (_req, res) => {
   try {
-    const [
-      mainQueueCounts,
-      deadLetterCounts,
-      mainQueueWaiting,
-      mainQueueActive,
-      mainQueueCompleted,
-      mainQueueFailed,
-      deadLetterWaiting,
-      deadLetterActive,
-      redisInfo,
-    ] = await Promise.all([
-      stellarEventsQueue.getJobCounts(),
-      deadLetterQueue.getJobCounts(),
-      stellarEventsQueue.getWaiting(),
-      stellarEventsQueue.getActive(),
-      stellarEventsQueue.getCompleted(),
-      stellarEventsQueue.getFailed(),
-      deadLetterQueue.getWaiting(),
-      deadLetterQueue.getActive(),
-      connection.info(),
-    ]);
-
-    const stats = {
-      timestamp: new Date().toISOString(),
-      uptime: process.uptime(),
-      metrics: {
-        totalJobs: queueMetrics.totalJobs,
-        completedJobs: queueMetrics.completedJobs,
-        failedJobs: queueMetrics.failedJobs,
-        retryCount: queueMetrics.retryCount,
-        deadLetterCount: queueMetrics.deadLetterCount,
-        failureRate: queueMetrics.getFailureRate(),
-        successRate: queueMetrics.getSuccessRate(),
-        processingTime: queueMetrics.getProcessingTime(),
-      },
-      mainQueue: {
-        ...mainQueueCounts,
-        waitingJobs: mainQueueWaiting.length,
-        activeJobs: mainQueueActive.length,
-        recentCompleted: mainQueueCompleted.slice(-10),
-        recentFailed: mainQueueFailed.slice(-10),
-      },
-      deadLetterQueue: {
-        ...deadLetterCounts,
-        waitingJobs: deadLetterWaiting.length,
-        activeJobs: deadLetterActive.length,
-      },
-      redis: {
-        connected: connection.status === 'ready',
-        version: redisInfo.redis_version,
-        usedMemory: redisInfo.used_memory_human,
-        connectedClients: redisInfo.connected_clients,
-      },
-      alerts: {
-        highFailureRate: queueMetrics.getFailureRate() > 5,
-        redisConnected: connection.status === 'ready',
-        queueProcessingActive: mainQueueActive.length > 0,
-      },
-    };
-
-    res.json(stats);
-  } catch (error) {
-    console.error('[Dashboard] Error fetching queue stats:', error);
-    res.status(500).json({ error: 'Failed to fetch queue statistics' });
+    res.json(await getQueueHealthSnapshot());
+  } catch {
+    // Stable, actionable status without leaking Redis URLs, credentials or job data.
+    res.status(503).json({ status: 'unavailable', error: 'Queue health reporting unavailable' });
   }
 });
 
