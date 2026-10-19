@@ -27,7 +27,27 @@
 
 import crypto from 'crypto';
 import webhookService from './webhookService.js';
-import { BoundedRetentionStore, createSingleFlight } from '../lib/operationalControls.js';
+import {
+  BoundedRetentionStore,
+  createSingleFlight,
+  gracefullyDegrade,
+} from '../lib/operationalControls.js';
+import { createModuleLogger } from '../config/logger.js';
+
+const log = createModuleLogger('incidentService');
+
+/** Upper bound for a single optional notification channel call. */
+const NOTIFY_TIMEOUT_MS = 5000;
+
+/**
+ * Channel outcome values. Optional infrastructure that is not configured is
+ * `skipped`; configured infrastructure that fails or times out is `failed`.
+ */
+export const ChannelStatus = Object.freeze({
+  SENT: 'sent',
+  SKIPPED: 'skipped',
+  FAILED: 'failed',
+});
 
 // ── Types / constants ─────────────────────────────────────────────────────────
 
@@ -72,6 +92,8 @@ const createRequests = new BoundedRetentionStore(1000);
 const routedNotifications = new BoundedRetentionStore(5000);
 const createFlight = createSingleFlight();
 const notificationFlight = createSingleFlight();
+/** incident id -> last notification routing summary (for degraded responses). */
+const lastNotificationByIncident = new BoundedRetentionStore(1000);
 
 // ── On-call rotation ──────────────────────────────────────────────────────────
 
@@ -129,7 +151,7 @@ export function getOnCallSchedule() {
  */
 async function alertPagerDuty(action, incident) {
   const key = process.env.PAGERDUTY_ROUTING_KEY;
-  if (!key) return;
+  if (!key) return ChannelStatus.SKIPPED;
 
   const payload = {
     routing_key: key,
@@ -157,17 +179,32 @@ async function alertPagerDuty(action, incident) {
     },
   };
 
+  return postNotification('pagerduty', 'https://events.pagerduty.com/v2/enqueue', payload);
+}
+
+/**
+ * POSTs a JSON body to an optional notification channel with a bounded
+ * timeout. Never throws; logs only the channel name and status code / error
+ * name so routing keys and webhook URLs never reach the logs.
+ *
+ * @returns {Promise<'sent'|'failed'>}
+ */
+async function postNotification(channel, url, body) {
   try {
-    const res = await fetch('https://events.pagerduty.com/v2/enqueue', {
+    const res = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(NOTIFY_TIMEOUT_MS),
     });
     if (!res.ok) {
-      console.error(`[Incident] PagerDuty alert failed: ${res.status}`);
+      log.warn({ msg: 'incident_notification_failed', channel, statusCode: res.status });
+      return ChannelStatus.FAILED;
     }
+    return ChannelStatus.SENT;
   } catch (err) {
-    console.error('[Incident] PagerDuty request error:', err.message);
+    log.warn({ msg: 'incident_notification_unavailable', channel, error: err?.name ?? 'Error' });
+    return ChannelStatus.FAILED;
   }
 }
 
@@ -179,7 +216,7 @@ async function alertPagerDuty(action, incident) {
  */
 async function alertSlack(incident, message) {
   const webhookUrl = process.env.SLACK_INCIDENT_WEBHOOK;
-  if (!webhookUrl) return;
+  if (!webhookUrl) return ChannelStatus.SKIPPED;
 
   const severityEmoji =
     {
@@ -226,16 +263,7 @@ async function alertSlack(incident, message) {
     ],
   };
 
-  try {
-    const res = await fetch(webhookUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-    if (!res.ok) console.error(`[Incident] Slack alert failed: ${res.status}`);
-  } catch (err) {
-    console.error('[Incident] Slack request error:', err.message);
-  }
+  return postNotification('slack', webhookUrl, body);
 }
 
 /**
@@ -255,7 +283,11 @@ async function dispatchAlerts(action, incident, message) {
           ? 'resolve'
           : 'trigger'; // updates re-trigger to keep PD in sync
 
-  await Promise.allSettled([alertPagerDuty(pdAction, incident), alertSlack(incident, message)]);
+  const [pagerduty, slack] = await Promise.all([
+    gracefullyDegrade(() => alertPagerDuty(pdAction, incident), ChannelStatus.FAILED),
+    gracefullyDegrade(() => alertSlack(incident, message), ChannelStatus.FAILED),
+  ]);
+  return { pagerduty, slack };
 }
 
 // ── Webhook Emission ─────────────────────────────────────────────────────────
@@ -294,13 +326,19 @@ export function buildIncidentWebhookPayload(eventType, incident, extra = {}) {
 async function emitIncidentWebhook(eventType, incident, extra = {}) {
   try {
     const payload = buildIncidentWebhookPayload(eventType, incident, extra);
-    if (webhookService && typeof webhookService.queueEventWebhooks === 'function') {
-      await webhookService.queueEventWebhooks(eventType, payload);
+    if (!webhookService || typeof webhookService.queueEventWebhooks !== 'function') {
+      return ChannelStatus.SKIPPED;
     }
-    return payload;
+    await webhookService.queueEventWebhooks(eventType, payload);
+    return ChannelStatus.SENT;
   } catch (err) {
-    console.error(`[Incident] Failed to emit webhook ${eventType}:`, err.message);
-    return null;
+    log.warn({
+      msg: 'incident_notification_unavailable',
+      channel: 'webhook',
+      eventType,
+      error: err?.name ?? 'Error',
+    });
+    return ChannelStatus.FAILED;
   }
 }
 
@@ -314,10 +352,22 @@ async function routeIncidentNotification(eventType, incident, { alertAction, mes
   const key = `${incident.id}:${eventType}:${incident.timeline.length}`;
   return notificationFlight(key, async () => {
     if (routedNotifications.get(key)) return routedNotifications.get(key);
-    if (alertAction) await dispatchAlerts(alertAction, incident, message);
-    await emitIncidentWebhook(eventType, incident, extra);
-    const record = { key, eventType, routed: true };
+    const alerts = alertAction
+      ? await dispatchAlerts(alertAction, incident, message)
+      : { pagerduty: ChannelStatus.SKIPPED, slack: ChannelStatus.SKIPPED };
+    const webhook = await emitIncidentWebhook(eventType, incident, extra);
+    const channels = { ...alerts, webhook };
+    const degraded = Object.values(channels).includes(ChannelStatus.FAILED);
+    const record = {
+      eventType,
+      status: degraded ? 'degraded' : 'ok',
+      channels,
+      ...(degraded
+        ? { message: 'Incident recorded; one or more notification channels are unavailable' }
+        : {}),
+    };
     routedNotifications.set(key, record);
+    lastNotificationByIncident.set(incident.id, record);
     return record;
   });
 }
@@ -573,12 +623,25 @@ function resolvedRunbookUrl(severity) {
 }
 
 /**
+ * Returns the routing summary of the most recent notification for an
+ * incident, or null if none was routed. Used by the API to surface a stable
+ * degraded response when optional infrastructure is unavailable.
+ *
+ * @param {string} id
+ * @returns {{ eventType: string, status: 'ok'|'degraded', channels: object, message?: string } | null}
+ */
+export function getNotificationStatus(id) {
+  return lastNotificationByIncident.get(id) ?? null;
+}
+
+/**
  * Resets incidents map for test suites
  */
 export function __resetForTests() {
   incidents.clear();
   createRequests.entries.clear();
   routedNotifications.entries.clear();
+  lastNotificationByIncident.entries.clear();
 }
 
 export default {
@@ -591,6 +654,8 @@ export default {
   listIncidents,
   getCurrentOnCall,
   getOnCallSchedule,
+  getNotificationStatus,
+  ChannelStatus,
   Severity,
   Status,
   __resetForTests,

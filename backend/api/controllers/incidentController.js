@@ -7,6 +7,19 @@
 
 import incidentService from '../../services/incidentService.js';
 
+/**
+ * Attaches the notification routing summary to a mutation response. When
+ * optional infrastructure (PagerDuty, Slack, webhooks) is unavailable the
+ * incident is still returned with `notifications.status === 'degraded'`.
+ */
+const withNotifications = (incident) => ({
+  ...incident,
+  notifications: incidentService.getNotificationStatus(incident.id) ?? {
+    status: 'ok',
+    channels: {},
+  },
+});
+
 const createIncident = async (req, res) => {
   try {
     const { title, description, severity, affectedServices, commander, runbookUrl } = req.body;
@@ -23,7 +36,7 @@ const createIncident = async (req, res) => {
       idempotencyKey: req.headers['idempotency-key'],
       createdBy: req.user?.address ?? req.headers['x-admin-api-key']?.slice(0, 8) ?? 'admin',
     });
-    res.status(201).json(incident);
+    res.status(201).json(withNotifications(incident));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -55,7 +68,7 @@ const updateStatus = async (req, res) => {
       actor,
       note,
     });
-    res.json(incident);
+    res.json(withNotifications(incident));
   } catch (err) {
     const code = err.message.includes('not found')
       ? 404
@@ -87,7 +100,7 @@ const linkEscrows = async (req, res) => {
       actor,
       note,
     });
-    return res.json(incident);
+    return res.json(withNotifications(incident));
   } catch (err) {
     const code = err.message.includes('not found') ? 404 : 500;
     return res.status(code).json({ error: err.message });
