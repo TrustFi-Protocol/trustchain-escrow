@@ -5,11 +5,71 @@
  * All routes require admin authentication.
  */
 
-import incidentService from '../../services/incidentService.js';
+import incidentService, { Severity } from '../../services/incidentService.js';
+import { createModuleLogger, getCorrelationId } from '../../config/logger.js';
+import {
+  incidentNotificationRoutingTotal,
+  incidentNotificationRoutingDuration,
+} from '../../lib/metrics.js';
 
-const createIncident = async (req, res) => {
+const log = createModuleLogger('controllers.incident');
+const KNOWN_SEVERITIES = new Set(Object.values(Severity));
+
+function outcomeFor(statusCode) {
+  if (statusCode >= 500) return 'error';
+  if (statusCode >= 400) return 'rejected';
+  return 'success';
+}
+
+/**
+ * Records bounded metrics and a correlated log line for an operation that
+ * routes incident notifications (PagerDuty, Slack, webhooks). Labels come from
+ * fixed sets only, and nothing from the request body, headers, or alert
+ * configuration (routing keys, webhook URLs, tokens) is logged. Telemetry
+ * failures are swallowed so they can never break routing.
+ */
+export function recordRoutingTelemetry(operation, { startedAt, statusCode, severity, incidentId }) {
+  try {
+    const outcome = outcomeFor(statusCode);
+    const severityLabel = KNOWN_SEVERITIES.has(severity) ? severity : 'unknown';
+    incidentNotificationRoutingTotal.inc({ operation, severity: severityLabel, outcome });
+    incidentNotificationRoutingDuration.observe(
+      { operation, outcome },
+      (Date.now() - startedAt) / 1000,
+    );
+    log[outcome === 'error' ? 'warn' : 'info']({
+      message: 'incident.notification_routing',
+      operation,
+      severity: severityLabel,
+      outcome,
+      statusCode,
+      incidentId: outcome === 'success' ? incidentId : undefined,
+      correlationId: getCorrelationId(),
+    });
+  } catch {
+    // Telemetry is best-effort.
+  }
+}
+
+/** Wraps a handler so every response emits routing telemetry. */
+function withRoutingTelemetry(operation, handler) {
+  return async (req, res) => {
+    const startedAt = Date.now();
+    const ctx = {};
+    await handler(req, res, ctx);
+    recordRoutingTelemetry(operation, {
+      startedAt,
+      statusCode: res.statusCode ?? 200,
+      severity: ctx.incident?.severity ?? ctx.severity,
+      incidentId: ctx.incident?.id,
+    });
+  };
+}
+
+const createIncident = withRoutingTelemetry('create', async (req, res, ctx) => {
   try {
     const { title, description, severity, affectedServices, commander, runbookUrl } = req.body;
+    ctx.severity = severity;
     if (!title || !description) {
       return res.status(400).json({ error: 'title and description are required' });
     }
@@ -22,11 +82,12 @@ const createIncident = async (req, res) => {
       runbookUrl,
       createdBy: req.user?.address ?? req.headers['x-admin-api-key']?.slice(0, 8) ?? 'admin',
     });
+    ctx.incident = incident;
     res.status(201).json(incident);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
-};
+});
 
 const listIncidents = (req, res) => {
   try {
@@ -45,7 +106,7 @@ const getIncident = (req, res) => {
   }
 };
 
-const updateStatus = async (req, res) => {
+const updateStatus = withRoutingTelemetry('update_status', async (req, res, ctx) => {
   try {
     const { status, note } = req.body;
     if (!status) return res.status(400).json({ error: 'status is required' });
@@ -54,6 +115,7 @@ const updateStatus = async (req, res) => {
       actor,
       note,
     });
+    ctx.incident = incident;
     res.json(incident);
   } catch (err) {
     const code = err.message.includes('not found')
@@ -63,7 +125,7 @@ const updateStatus = async (req, res) => {
         : 500;
     res.status(code).json({ error: err.message });
   }
-};
+});
 
 const attachPostMortem = (req, res) => {
   try {
@@ -75,7 +137,7 @@ const attachPostMortem = (req, res) => {
   }
 };
 
-const linkEscrows = async (req, res) => {
+const linkEscrows = withRoutingTelemetry('link_escrows', async (req, res, ctx) => {
   try {
     const { escrowIds, note } = req.body;
     if (!escrowIds) {
@@ -86,12 +148,13 @@ const linkEscrows = async (req, res) => {
       actor,
       note,
     });
+    ctx.incident = incident;
     return res.json(incident);
   } catch (err) {
     const code = err.message.includes('not found') ? 404 : 500;
     return res.status(code).json({ error: err.message });
   }
-};
+});
 
 const getOnCall = (_req, res) => {
   res.json({

@@ -251,4 +251,21 @@ export const compressionRatio = new client.Histogram({
   registers: [register],
 });
 
+// ── Incident Notification Routing ─────────────────────────────────────────────
+
+export const incidentNotificationRoutingTotal = new client.Counter({
+  name: 'incident_notification_routing_total',
+  help: 'Incident operations that route notifications, by operation, severity, and outcome',
+  labelNames: ['operation', 'severity', 'outcome'],
+  registers: [register],
+});
+
+export const incidentNotificationRoutingDuration = new client.Histogram({
+  name: 'incident_notification_routing_duration_seconds',
+  help: 'Duration of incident operations that route notifications',
+  labelNames: ['operation', 'outcome'],
+  buckets: [0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10],
+  registers: [register],
+});
+
 export { register };
