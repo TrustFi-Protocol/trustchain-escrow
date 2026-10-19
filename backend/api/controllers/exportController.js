@@ -2,8 +2,52 @@ import crypto from 'crypto';
 import exportService from '../../services/exportService.js';
 import { createModuleLogger } from '../../config/logger.js';
 import { exportDeliveriesTotal, exportDeliveryDuration } from '../../lib/metrics.js';
+import { BoundedRetentionStore, createSingleFlight } from '../../lib/operationalControls.js';
 
 const LARGE_EXPORT_LIMIT_BYTES = 10 * 1024 * 1024;
+
+/**
+ * Large exports are delivered by email. Retries within this window, and concurrent
+ * requests, for the same tenant + address reuse the first queued delivery instead
+ * of sending the export again.
+ */
+const DELIVERY_DEDUPE_WINDOW_MS =
+  Number.parseInt(process.env.EXPORT_DELIVERY_DEDUPE_WINDOW_MS ?? '', 10) > 0
+    ? Number.parseInt(process.env.EXPORT_DELIVERY_DEDUPE_WINDOW_MS, 10)
+    : 15 * 60 * 1000;
+const DELIVERY_DEDUPE_LIMIT = 1000;
+
+let recentLargeDeliveries = new BoundedRetentionStore(DELIVERY_DEDUPE_LIMIT);
+let largeDeliveryFlight = createSingleFlight();
+
+/**
+ * Queues a large export delivery at most once per tenant + address per dedupe window.
+ * Failed attempts are not remembered, so a retry after a failure queues normally.
+ *
+ * @returns {Promise<{ jobId: string, replayed: boolean }>}
+ */
+async function queueLargeExportOnce(address, { tenantId, requestedBy }) {
+  const key = `${tenantId ?? 'default'}:${address}`;
+  const recent = recentLargeDeliveries.get(key);
+  if (recent && Date.now() - recent.at < DELIVERY_DEDUPE_WINDOW_MS) {
+    return { jobId: recent.jobId, replayed: true };
+  }
+
+  let leader = false;
+  const result = await largeDeliveryFlight(key, async () => {
+    leader = true;
+    const queued = await exportService.queueLargeExport(address, { tenantId, requestedBy });
+    recentLargeDeliveries.set(key, { at: Date.now(), jobId: queued.jobId });
+    return queued;
+  });
+  return { jobId: result.jobId, replayed: !leader };
+}
+
+/** Clears delivery dedupe state (tests only). */
+export const _resetExportDeliveryDedupe = () => {
+  recentLargeDeliveries = new BoundedRetentionStore(DELIVERY_DEDUPE_LIMIT);
+  largeDeliveryFlight = createSingleFlight();
+};
 
 const log = createModuleLogger('controller.export');
 
@@ -98,11 +142,15 @@ const exportUserData = async (req, res) => {
     }
 
     if (Buffer.byteLength(fileContent, 'utf8') > LARGE_EXPORT_LIMIT_BYTES) {
-      const queued = await exportService.queueLargeExport(address, {
+      const queued = await queueLargeExportOnce(address, {
         tenantId,
         requestedBy: req.user?.address,
       });
-      recordExportDelivery(req, 'export', 'queued', startedAt, { jobId: queued.jobId });
+      if (queued.replayed) res.setHeader('Idempotent-Replayed', 'true');
+      recordExportDelivery(req, 'export', 'queued', startedAt, {
+        jobId: queued.jobId,
+        replayed: queued.replayed,
+      });
       return res.status(202).json({
         status: 'queued',
         message: 'Export is larger than 10MB and will be delivered by email.',
@@ -205,11 +253,15 @@ const downloadExportFile = async (req, res) => {
     }
 
     if (Buffer.byteLength(fileContent, 'utf8') > LARGE_EXPORT_LIMIT_BYTES) {
-      const queued = await exportService.queueLargeExport(address, {
+      const queued = await queueLargeExportOnce(address, {
         tenantId,
         requestedBy: req.user?.address,
       });
-      recordExportDelivery(req, 'download', 'queued', startedAt, { jobId: queued.jobId });
+      if (queued.replayed) res.setHeader('Idempotent-Replayed', 'true');
+      recordExportDelivery(req, 'download', 'queued', startedAt, {
+        jobId: queued.jobId,
+        replayed: queued.replayed,
+      });
       return res.status(202).json({
         status: 'queued',
         message: 'Export is larger than 10MB and will be delivered by email.',

@@ -10,6 +10,7 @@ import authMiddleware from '../middleware/auth.js';
 import { authorizeParamAddress } from '../middleware/authorization.js';
 import adminAuth, { optionalAdminAuth } from '../middleware/adminAuth.js';
 import { createSlidingWindowRateLimiter } from '../middleware/rateLimiter.js';
+import { idempotencyMiddleware } from '../../lib/idempotency.js';
 
 const router = express.Router();
 router.use(optionalAdminAuth, authMiddleware);
@@ -52,9 +53,15 @@ router.get('/:address/export/file', exportRateLimit, exportController.downloadEx
 
 /**
  * @route  POST /api/users/:address/export/jobs
- * @desc   Queue a background export job
+ * @desc   Queue a background export job. Send an `Idempotency-Key` header so retries
+ *         replay the original response instead of queuing a duplicate job.
  */
-router.post('/:address/export/jobs', exportRateLimit, exportController.createExportJob);
+router.post(
+  '/:address/export/jobs',
+  exportRateLimit,
+  idempotencyMiddleware,
+  exportController.createExportJob,
+);
 
 /**
  * @route  GET /api/users/:address/export/jobs/:jobId
