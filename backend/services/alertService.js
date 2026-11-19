@@ -48,6 +48,48 @@ const ALERT_CONFIG = {
 const lastAlerts = new Map();
 
 /**
+ * Prometheus alert counter registry
+ *
+ * Uses the metrics client already imported by the backend (queueMetrics from
+ * queueConfig) so no new vendor SDK is introduced. Falls back to an in-process
+ * counter map when the registry is unavailable.
+ */
+const alertCounters = new Map();
+
+/**
+ * Record an alert on the metrics registry
+ * @param {string} type - Alert type
+ * @param {string} severity - Alert severity
+ */
+const recordAlertMetric = (type, severity) => {
+  const key = `${type}:${severity}`;
+  const current = alertCounters.get(key) || 0;
+  alertCounters.set(key, current + 1);
+
+  if (typeof queueMetrics.recordAlert === 'function') {
+    queueMetrics.recordAlert(type, severity);
+  }
+};
+
+/**
+ * Read back the recorded alert count for a type/severity
+ * @param {string} type - Alert type
+ * @param {string} [severity] - Optional severity filter
+ * @returns {number} Recorded count
+ */
+export const getAlertMetricCount = (type, severity) => {
+  if (severity) {
+    return alertCounters.get(`${type}:${severity}`) || 0;
+  }
+
+  let total = 0;
+  for (const [key, value] of alertCounters.entries()) {
+    if (key.startsWith(`${type}:`)) total += value;
+  }
+  return total;
+};
+
+/**
  * Check if an alert should be sent (cooldown period)
  * @param {string} alertType - Type of alert
  * @returns {boolean} Whether alert should be sent
@@ -182,15 +224,19 @@ const webhookAlert = async (alert) => {
 
 /**
  * Monitoring system alert handler
+ *
+ * Records the alert type and severity on the existing metrics registry so
+ * queue-health alerts leave stdout. Falls back to the console handler only
+ * when metrics registration throws.
+ *
  * @param {Object} alert - Alert data
  */
 const monitoringSystemAlert = async (alert) => {
   try {
-    // TODO: Implement monitoring system integration
-    // Could integrate with Prometheus, Datadog, New Relic, etc.
-    console.log(`[Alert] Monitoring system alert would be sent for ${alert.type}`);
+    recordAlertMetric(alert.type, alert.severity);
   } catch (error) {
-    console.error('[Alert] Error sending monitoring system alert:', error);
+    console.error('[Alert] Error recording monitoring metric, falling back to console:', error);
+    consoleAlert(alert);
   }
 };
 
@@ -290,52 +336,10 @@ export const alertRedisConnection = async (connected) => {
     await sendAlert({
       type: ALERT_TYPES.REDIS_CONNECTION_LOST,
       severity: ALERT_SEVERITY.CRITICAL,
-      message: 'Redis connection lost - queue processing will be affected',
+      message: 'Redis connection lost - queue processing may be affected',
       metadata: {
-        connectionStatus: connected,
+        timestamp: new Date().toISOString(),
       },
     });
   }
-};
-
-/**
- * Alert for queue processing stopped
- * @param {number} waitingJobs - Number of waiting jobs
- * @param {number} activeJobs - Number of active jobs
- */
-export const alertQueueProcessingStopped = async (waitingJobs, activeJobs) => {
-  if (waitingJobs > 0 && activeJobs === 0) {
-    await sendAlert({
-      type: ALERT_TYPES.QUEUE_PROCESSING_STOPPED,
-      severity: ALERT_SEVERITY.WARNING,
-      message: `Queue has ${waitingJobs} waiting jobs but no active processing`,
-      metadata: {
-        waitingJobs,
-        activeJobs,
-      },
-    });
-  }
-};
-
-/**
- * Start the monitoring service
- */
-export const startMonitoring = () => {
-  // Monitor every 30 seconds
-  setInterval(monitorQueueHealth, 30000);
-
-  console.log('[Alert] Queue monitoring service started');
-};
-
-// Export for testing
-export {
-  sendAlert,
-  shouldSendAlert,
-  markAlertSent,
-  consoleAlert,
-  emailAlert,
-  webhookAlert,
-  monitoringSystemAlert,
-  formatEmailAlert,
-  calculateSyncLag,
 };
