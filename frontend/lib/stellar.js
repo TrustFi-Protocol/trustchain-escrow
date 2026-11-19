@@ -356,6 +356,50 @@ export async function buildRaiseDisputeTx({ sourceAddress, escrowId, milestoneId
  * 2. Backend submits to Stellar
  * 3. Return { hash, status }
  */
+
+/**
+ * Builds an unsigned `reject_milestone_with_reason` transaction XDR.
+ */
+export async function buildRejectMilestoneTx({
+  sourceAddress,
+  escrowId,
+  milestoneId,
+  reasonHash,
+}) {
+  _validateInputs({ sourceAddress, escrowId, milestoneId });
+
+  if (!/^[a-f0-9]{64}$/i.test(reasonHash || '')) {
+    throw new Error(`Reason hash must be a 32-byte hex string, got: ${reasonHash}`);
+  }
+
+  const server = new SorobanRpc.Server(_SOROBAN_RPC_URL);
+  const account = await server.getAccount(sourceAddress);
+  const contract = new Contract(_CONTRACT_ADDRESS);
+  const txBuilder = new TransactionBuilder(account, {
+    fee: BASE_FEE,
+    networkPassphrase: _NETWORK_PASSPHRASE,
+  });
+
+  txBuilder.addOperation(
+    contract.call(
+      'reject_milestone_with_reason',
+      new Address(sourceAddress).toScVal(),
+      nativeToScVal(BigInt(escrowId), { type: 'u64' }),
+      nativeToScVal(BigInt(milestoneId), { type: 'u32' }),
+      xdr.ScVal.scvTypeBytes(Buffer.from(reasonHash, 'hex')),
+    ),
+  );
+
+  txBuilder.setTimeout(300);
+  const tx = txBuilder.build();
+  const prepared = await server.simulateTransaction(tx);
+  if (SorobanRpc.isSimulationError(prepared)) {
+    throw new Error(`Simulation failed: ${prepared.error}`);
+  }
+  const assembled = SorobanRpc.assembleTransaction(tx, prepared).build();
+  return assembled.toXDR('base64');
+}
+
 export async function broadcastTransaction(signedXdr) {
   const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/escrows/broadcast`, {
     method: 'POST',
