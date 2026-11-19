@@ -140,12 +140,44 @@ async function notifyDisputeRaised(payload) {
   return queueNotifications('dispute.raised', payload, disputeRaisedTemplate);
 }
 
+function parseAlertRecipients() {
+  return String(process.env.ALERT_EMAIL_RECIPIENTS || '')
+    .split(',')
+    .map((entry) => sanitizeEmail(entry))
+    .filter((entry) => EMAIL_RE.test(entry));
+}
+
+async function sendAlert(alert) {
+  const recipients = parseAlertRecipients();
+
+  if (recipients.length === 0) {
+    console.warn('[EmailService] ALERT_EMAIL_RECIPIENTS is empty; skipping alert email');
+    return { sent: 0, skipped: true };
+  }
+
+  const subject = alert?.subject || 'Alert';
+  const text = alert?.text || alert?.body || '';
+  const html = alert?.html || undefined;
+
+  const result = await enqueueEvent('alert.email', {
+    recipients: recipients.map((email) => ({ email })),
+    message: {
+      subject,
+      text,
+      html,
+      from: { email: config.fromEmail, name: config.fromName },
+    },
+  });
+
+  return { sent: result.accepted.length, accepted: result.accepted };
+}
+
 function resetEmailServiceForTests() {
   preferences.clear();
   __resetForTests();
 }
 
-export { buildUnsubscribeUrl, getPreference, unsubscribe, resubscribe, start };
+export { buildUnsubscribeUrl, getPreference, unsubscribe, resubscribe, start, sendAlert };
 export {
   resetEmailServiceForTests as __resetForTests,
   getQueueSnapshot,
@@ -159,6 +191,7 @@ export default {
   unsubscribe,
   resubscribe,
   start,
+  sendAlert,
   getQueueSnapshot,
   notifyDisputeRaised,
   notifyEscrowStatusChange,

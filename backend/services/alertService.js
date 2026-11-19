@@ -137,23 +137,34 @@ const consoleAlert = (alert) => {
 };
 
 /**
+ * Parse the configured alert email recipients
+ * @returns {string[]} List of recipient addresses
+ */
+const getEmailRecipients = () => {
+  return (process.env.ALERT_EMAIL_RECIPIENTS || '')
+    .split(',')
+    .map((address) => address.trim())
+    .filter(Boolean);
+};
+
+/**
  * Email alert handler
  * @param {Object} alert - Alert data
  */
 const emailAlert = async (alert) => {
-  try {
-    // TODO: Implement email sending
-    // const emailService = await import('./emailService.js');
-    // await emailService.sendAlert({
-    //   to: process.env.ALERT_EMAIL_RECIPIENTS?.split(','),
-    //   subject: `[${alert.severity.toUpperCase()}] ${alert.type}`,
-    //   body: formatEmailAlert(alert),
-    // });
+  const recipients = getEmailRecipients();
 
-    console.log(`[Alert] Email alert would be sent for ${alert.type}`);
-  } catch (error) {
-    console.error('[Alert] Error sending email alert:', error);
+  if (recipients.length === 0) {
+    console.warn('[Alert] Email alert skipped: no recipients configured in ALERT_EMAIL_RECIPIENTS');
+    return;
   }
+
+  const emailService = await import('./emailService.js');
+  await emailService.sendAlert({
+    to: recipients,
+    subject: `[${alert.severity.toUpperCase()}] ${alert.type}`,
+    body: formatEmailAlert(alert),
+  });
 };
 
 /**
@@ -290,52 +301,10 @@ export const alertRedisConnection = async (connected) => {
     await sendAlert({
       type: ALERT_TYPES.REDIS_CONNECTION_LOST,
       severity: ALERT_SEVERITY.CRITICAL,
-      message: 'Redis connection lost - queue processing will be affected',
+      message: 'Redis connection lost - queue processing may be affected',
       metadata: {
-        connectionStatus: connected,
+        timestamp: new Date().toISOString(),
       },
     });
   }
-};
-
-/**
- * Alert for queue processing stopped
- * @param {number} waitingJobs - Number of waiting jobs
- * @param {number} activeJobs - Number of active jobs
- */
-export const alertQueueProcessingStopped = async (waitingJobs, activeJobs) => {
-  if (waitingJobs > 0 && activeJobs === 0) {
-    await sendAlert({
-      type: ALERT_TYPES.QUEUE_PROCESSING_STOPPED,
-      severity: ALERT_SEVERITY.WARNING,
-      message: `Queue has ${waitingJobs} waiting jobs but no active processing`,
-      metadata: {
-        waitingJobs,
-        activeJobs,
-      },
-    });
-  }
-};
-
-/**
- * Start the monitoring service
- */
-export const startMonitoring = () => {
-  // Monitor every 30 seconds
-  setInterval(monitorQueueHealth, 30000);
-
-  console.log('[Alert] Queue monitoring service started');
-};
-
-// Export for testing
-export {
-  sendAlert,
-  shouldSendAlert,
-  markAlertSent,
-  consoleAlert,
-  emailAlert,
-  webhookAlert,
-  monitoringSystemAlert,
-  formatEmailAlert,
-  calculateSyncLag,
 };
