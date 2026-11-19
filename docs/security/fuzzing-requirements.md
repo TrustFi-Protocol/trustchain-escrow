@@ -191,6 +191,16 @@ mod roundtrip_tests {
 
 Apply the same pattern to every other `#[contracttype]` struct in the contract (e.g., `Milestone`, `EscrowStatus`, `MilestoneStatus`).
 
+### Currently Covered Structs
+
+The following `#[contracttype]` structs already have deterministic ScVal round-trip tests:
+
+- `EscrowMeta` and `Milestone` — `contracts/escrow_contract/src/types.rs`
+- `Timelock` (fields `duration_ledger`, `start_ledger`) — `contracts/escrow_contract/src/types.rs`
+- `UsdMilestone` (fields `id`, `amount_micro_usd`, `completed`) — `contracts/escrow_contract/src/oracle.rs`
+
+Contributors adding new `#[contracttype]` structs must add an equivalent round-trip test alongside the struct definition.
+
 ---
 
 ## Regression Test Requirement
