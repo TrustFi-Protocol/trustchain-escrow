@@ -835,3 +835,150 @@ pub struct DexSwapRecord {
     /// Whether the swap was successful.
     pub success: bool,
 }
+
+#[cfg(test)]
+mod scval_roundtrip_tests {
+    use super::{
+        EscrowStatus, RecurringInterval, RecurringPaymentConfig, RecurringScheduleStatus,
+        SlashRecord, StateHistoryEntry,
+    };
+    use soroban_sdk::{testutils::Address as _, Address, Env, String, TryFromVal, Val};
+
+    fn assert_scval_roundtrip<T>(env: &Env, original: &T)
+    where
+        T: soroban_sdk::IntoVal<Env, Val>
+            + soroban_sdk::TryFromVal<Env, Val>
+            + Clone
+            + core::fmt::Debug,
+    {
+        let serialised: Val = original.clone().into_val(env);
+        let decoded = T::try_from_val(env, &serialised).expect("ScVal round-trip must not fail");
+        assert_eq!(
+            format!("{original:?}"),
+            format!("{decoded:?}"),
+            "ScVal round-trip changed the value"
+        );
+    }
+
+    #[test]
+    fn recurring_payment_config_scval_roundtrip() {
+        let env = Env::default();
+        let zero = RecurringPaymentConfig {
+            interval: RecurringInterval::Daily,
+            payment_amount: 0,
+            start_time: 0,
+            next_payment_at: 0,
+            end_date: None,
+            total_payments: 0,
+            payments_remaining: 0,
+            processed_payments: 0,
+            final_payment_amount: None,
+            paused: false,
+            cancelled: false,
+            paused_at: None,
+            last_payment_at: None,
+        };
+        assert_scval_roundtrip(&env, &zero);
+
+        let nonzero = RecurringPaymentConfig {
+            interval: RecurringInterval::Monthly,
+            payment_amount: 1_000_000,
+            start_time: 1_700_000_000,
+            next_payment_at: 1_700_086_400,
+            end_date: Some(1_710_000_000),
+            total_payments: 12,
+            payments_remaining: 9,
+            processed_payments: 3,
+            final_payment_amount: Some(500_000),
+            paused: true,
+            cancelled: false,
+            paused_at: Some(1_700_050_000),
+            last_payment_at: Some(1_700_040_000),
+        };
+        assert_scval_roundtrip(&env, &nonzero);
+    }
+
+    #[test]
+    fn recurring_schedule_status_scval_roundtrip() {
+        let env = Env::default();
+        assert_scval_roundtrip(
+            &env,
+            &RecurringScheduleStatus {
+                is_active: false,
+                is_paused: false,
+                is_cancelled: false,
+                next_payment_at: 0,
+                payments_remaining: 0,
+                payment_amount: 0,
+            },
+        );
+        assert_scval_roundtrip(
+            &env,
+            &RecurringScheduleStatus {
+                is_active: true,
+                is_paused: true,
+                is_cancelled: true,
+                next_payment_at: 99,
+                payments_remaining: 4,
+                payment_amount: 250,
+            },
+        );
+    }
+
+    #[test]
+    fn slash_record_scval_roundtrip() {
+        let env = Env::default();
+        let user = Address::generate(&env);
+        let recipient = Address::generate(&env);
+        assert_scval_roundtrip(
+            &env,
+            &SlashRecord {
+                escrow_id: 0,
+                slashed_user: user.clone(),
+                recipient: recipient.clone(),
+                amount: 0,
+                reason: String::from_str(&env, ""),
+                slashed_at: 0,
+                disputed: false,
+            },
+        );
+        assert_scval_roundtrip(
+            &env,
+            &SlashRecord {
+                escrow_id: 42,
+                slashed_user: user,
+                recipient,
+                amount: 7_500,
+                reason: String::from_str(&env, "missed deadline"),
+                slashed_at: 1_700_000_111,
+                disputed: true,
+            },
+        );
+    }
+
+    #[test]
+    fn state_history_entry_scval_roundtrip() {
+        let env = Env::default();
+        let caller = Address::generate(&env);
+        assert_scval_roundtrip(
+            &env,
+            &StateHistoryEntry {
+                escrow_id: 0,
+                from_status: EscrowStatus::Active,
+                to_status: EscrowStatus::Active,
+                timestamp: 0,
+                caller: caller.clone(),
+            },
+        );
+        assert_scval_roundtrip(
+            &env,
+            &StateHistoryEntry {
+                escrow_id: 9,
+                from_status: EscrowStatus::Active,
+                to_status: EscrowStatus::Disputed,
+                timestamp: 1_234_567,
+                caller,
+            },
+        );
+    }
+}
