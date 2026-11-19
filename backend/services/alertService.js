@@ -8,6 +8,8 @@
  */
 
 import { queueMetrics } from '../lib/queueConfig.js';
+import { getLatestLedger } from '../lib/stellarRpc.js';
+import { IndexerState } from '../models/IndexerState.js';
 
 /**
  * Alert severity levels
@@ -273,12 +275,35 @@ export const monitorQueueHealth = async () => {
 
 /**
  * Calculate sync lag between blockchain and database
- * @returns {number} Sync lag in milliseconds
+ *
+ * Compares the latest ledger from the chain head with the last processed
+ * ledger recorded in the indexer checkpoint. Returns the lag in milliseconds
+ * using the configured ledger close time. Returns 0 only when the checkpoint
+ * is at or ahead of the head. Throws if either read fails so callers can
+ * record the monitoring error instead of treating lag as zero.
+ *
+ * @returns {Promise<number>} Sync lag in milliseconds
  */
 const calculateSyncLag = async () => {
-  // TODO: Implement sync lag calculation by comparing the latest blockchain
-  // ledger with the last processed ledger.
-  return 0;
+  const latestLedger = await getLatestLedger();
+  const headSequence = Number(latestLedger?.sequence);
+  if (!Number.isFinite(headSequence)) {
+    throw new Error('Unable to determine latest ledger sequence from RPC');
+  }
+
+  const checkpoint = await IndexerState.getCheckpoint();
+  const lastProcessed = Number(checkpoint?.lastProcessedLedger);
+  if (!Number.isFinite(lastProcessed)) {
+    throw new Error('Unable to determine last processed ledger from IndexerState');
+  }
+
+  const ledgerGap = headSequence - lastProcessed;
+  if (ledgerGap <= 0) {
+    return 0;
+  }
+
+  const ledgerCloseTimeMs = Number(process.env.LEDGER_CLOSE_TIME_MS) || 5000;
+  return ledgerGap * ledgerCloseTimeMs;
 };
 
 /**
@@ -286,56 +311,6 @@ const calculateSyncLag = async () => {
  * @param {boolean} connected - Redis connection status
  */
 export const alertRedisConnection = async (connected) => {
-  if (!connected) {
-    await sendAlert({
-      type: ALERT_TYPES.REDIS_CONNECTION_LOST,
-      severity: ALERT_SEVERITY.CRITICAL,
-      message: 'Redis connection lost - queue processing will be affected',
-      metadata: {
-        connectionStatus: connected,
-      },
-    });
-  }
-};
+ 
 
-/**
- * Alert for queue processing stopped
- * @param {number} waitingJobs - Number of waiting jobs
- * @param {number} activeJobs - Number of active jobs
- */
-export const alertQueueProcessingStopped = async (waitingJobs, activeJobs) => {
-  if (waitingJobs > 0 && activeJobs === 0) {
-    await sendAlert({
-      type: ALERT_TYPES.QUEUE_PROCESSING_STOPPED,
-      severity: ALERT_SEVERITY.WARNING,
-      message: `Queue has ${waitingJobs} waiting jobs but no active processing`,
-      metadata: {
-        waitingJobs,
-        activeJobs,
-      },
-    });
-  }
-};
-
-/**
- * Start the monitoring service
- */
-export const startMonitoring = () => {
-  // Monitor every 30 seconds
-  setInterval(monitorQueueHealth, 30000);
-
-  console.log('[Alert] Queue monitoring service started');
-};
-
-// Export for testing
-export {
-  sendAlert,
-  shouldSendAlert,
-  markAlertSent,
-  consoleAlert,
-  emailAlert,
-  webhookAlert,
-  monitoringSystemAlert,
-  formatEmailAlert,
-  calculateSyncLag,
-};
+/* … truncated 1252 chars — edit only what you need near the top … */
