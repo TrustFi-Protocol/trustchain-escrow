@@ -100,6 +100,7 @@ mod gas_profiling;
 mod property_invariant_tests;
 mod reentrancy_guard_tests;
 mod self_escrow_tests;
+mod set_max_milestones_boundary_tests;
 mod slippage_tests;
 mod split_escrow_tests;
 mod state_history;
