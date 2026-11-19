@@ -21,6 +21,7 @@
  *   SLACK_INCIDENT_WEBHOOK  — Slack incoming webhook URL
  *   ONCALL_SCHEDULE         — JSON array of on-call entries (see below)
  *   INCIDENT_ALERT_EMAIL    — email address for incident notifications
+ *   RUNBOOK_BASE_URL        — override for the runbook base URL
  *
  * @module incidentService
  */
@@ -57,6 +58,31 @@ const TRANSITIONS = {
   [Status.POST_MORTEM]: [Status.CLOSED],
   [Status.CLOSED]: [],
 };
+
+// ── Runbook URLs ──────────────────────────────────────────────────────────────
+
+const DEFAULT_RUNBOOK_BASE_URL =
+  'https://github.com/TrustFi-Protocol/trustchain-escrow/blob/main/docs/incidents/runbooks';
+
+const RUNBOOK_FILENAMES = Object.freeze({
+  [Severity.SEV1]: 'sev1-critical-outage.md',
+  [Severity.SEV2]: 'sev2-major-degradation.md',
+  [Severity.SEV3]: 'sev3-partial-failure.md',
+  [Severity.SEV4]: 'sev4-minor-issue.md',
+});
+
+/**
+ * Resolves the runbook URL for a given severity.
+ * `RUNBOOK_BASE_URL` overrides the default base URL.
+ *
+ * @param {string} severity
+ * @returns {string}
+ */
+export function resolvedRunbookUrl(severity) {
+  const base = (process.env.RUNBOOK_BASE_URL || DEFAULT_RUNBOOK_BASE_URL).replace(/\/+$/, '');
+  const filename = RUNBOOK_FILENAMES[severity] ?? RUNBOOK_FILENAMES[Severity.SEV3];
+  return `${base}/${filename}`;
+}
 
 // ── In-memory store (replace with DB persistence in production) ───────────────
 
@@ -273,279 +299,6 @@ export function buildIncidentWebhookPayload(eventType, incident, extra = {}) {
     title: incident.title,
     description: incident.description,
     commander: incident.commander,
-    timestamp: new Date().toISOString(),
-    ...extra,
-  };
-}
+    timestamp: new Date
 
-/**
- * Dispatches incident webhook event via webhookService
- */
-async function emitIncidentWebhook(eventType, incident, extra = {}) {
-  try {
-    const payload = buildIncidentWebhookPayload(eventType, incident, extra);
-    if (webhookService && typeof webhookService.queueEventWebhooks === 'function') {
-      await webhookService.queueEventWebhooks(eventType, payload);
-    }
-    return payload;
-  } catch (err) {
-    console.error(`[Incident] Failed to emit webhook ${eventType}:`, err.message);
-    return null;
-  }
-}
-
-// ── Incident CRUD ─────────────────────────────────────────────────────────────
-
-/**
- * @typedef {Object} Incident
- * @property {string}   id
- * @property {string}   title
- * @property {string}   description
- * @property {string}   severity        — SEV1–SEV4
- * @property {string}   status
- * @property {string[]} affectedServices
- * @property {string[]} affectedEscrowIds
- * @property {string}   commander       — incident commander name/email
- * @property {string}   runbookUrl
- * @property {string}   createdAt
- * @property {string}   updatedAt
- * @property {string}   [resolvedAt]
- * @property {object[]} timeline        — audit trail of status changes
- * @property {object}   [postMortem]
- */
-
-/**
- * Creates a new incident, fires alerts, and emits webhook event.
- *
- * @param {object} params
- * @returns {Promise<Incident>}
- */
-export async function createIncident({
-  title,
-  description,
-  severity = Severity.SEV3,
-  affectedServices = [],
-  affectedEscrowIds = [],
-  commander,
-  runbookUrl,
-  createdBy,
-}) {
-  const id = `INC-${Date.now()}-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
-  const now = new Date().toISOString();
-
-  // Auto-assign on-call engineer as commander if not specified
-  const onCall = getCurrentOnCall();
-  const resolvedCommander = commander ?? onCall?.name ?? 'unassigned';
-
-  /** @type {Incident} */
-  const incident = {
-    id,
-    title,
-    description,
-    severity,
-    status: Status.OPEN,
-    affectedServices: [...affectedServices],
-    affectedEscrowIds: (Array.isArray(affectedEscrowIds) ? affectedEscrowIds : []).map(String),
-    commander: resolvedCommander,
-    runbookUrl: runbookUrl ?? resolvedRunbookUrl(severity),
-    createdAt: now,
-    updatedAt: now,
-    resolvedAt: null,
-    createdBy: createdBy ?? 'system',
-    timeline: [
-      { ts: now, status: Status.OPEN, actor: createdBy ?? 'system', note: 'Incident created' },
-    ],
-    postMortem: null,
-  };
-
-  incidents.set(id, incident);
-  console.error(`[Incident] ${id} CREATED severity=${severity} title="${title}"`);
-
-  await dispatchAlerts('trigger', incident);
-
-  // Emit webhook for incident opened
-  await emitIncidentWebhook('incident.opened', incident, { action: 'opened' });
-
-  return incident;
-}
-
-/**
- * Transitions an incident to a new status and emits webhook.
- *
- * @param {string} id
- * @param {string} newStatus
- * @param {object} [opts]
- * @returns {Promise<Incident>}
- */
-export async function updateIncidentStatus(id, newStatus, { actor = 'system', note = '' } = {}) {
-  const incident = incidents.get(id);
-  if (!incident) throw new Error(`Incident ${id} not found`);
-
-  const allowed = TRANSITIONS[incident.status] ?? [];
-  if (!allowed.includes(newStatus)) {
-    throw new Error(
-      `Invalid transition: ${incident.status} → ${newStatus}. Allowed: ${allowed.join(', ')}`,
-    );
-  }
-
-  const now = new Date().toISOString();
-  incident.status = newStatus;
-  incident.updatedAt = now;
-  if (newStatus === Status.RESOLVED || newStatus === Status.CLOSED) {
-    incident.resolvedAt = now;
-  }
-
-  incident.timeline.push({ ts: now, status: newStatus, actor, note });
-  incidents.set(id, incident);
-
-  const pdAction =
-    newStatus === Status.ACKNOWLEDGED
-      ? 'acknowledge'
-      : newStatus === Status.RESOLVED || newStatus === Status.CLOSED
-        ? 'resolve'
-        : 'update';
-
-  await dispatchAlerts(pdAction, incident, note || undefined);
-
-  // Emit status change webhooks
-  if (newStatus === Status.RESOLVED || newStatus === Status.CLOSED) {
-    await emitIncidentWebhook('incident.resolved', incident, { actor, note, status: newStatus });
-  } else {
-    await emitIncidentWebhook('incident.updated', incident, { actor, note, status: newStatus });
-  }
-
-  console.log(`[Incident] ${id} → ${newStatus} by ${actor}`);
-  return incident;
-}
-
-/**
- * Link affected escrows to an incident and emit webhook
- *
- * @param {string} id - Incident ID
- * @param {string[]|string} escrowIds - Escrow IDs to link
- * @param {object} [opts]
- * @returns {Promise<Incident>}
- */
-export async function linkEscrowsToIncident(id, escrowIds = [], { actor = 'system', note = '' } = {}) {
-  const incident = incidents.get(id);
-  if (!incident) throw new Error(`Incident ${id} not found`);
-
-  const existingEscrows = new Set(incident.affectedEscrowIds || []);
-  const normalizedIds = (Array.isArray(escrowIds) ? escrowIds : [escrowIds]).map(String);
-  const newlyLinked = [];
-
-  for (const eid of normalizedIds) {
-    if (!existingEscrows.has(eid)) {
-      existingEscrows.add(eid);
-      newlyLinked.push(eid);
-    }
-  }
-
-  incident.affectedEscrowIds = Array.from(existingEscrows);
-  const now = new Date().toISOString();
-  incident.updatedAt = now;
-  incident.timeline.push({
-    ts: now,
-    status: incident.status,
-    actor,
-    note: note || `Linked escrows: ${normalizedIds.join(', ')}`,
-  });
-  incidents.set(id, incident);
-
-  console.log(`[Incident] ${id}: linked ${newlyLinked.length} new escrows`);
-
-  // Emit webhook for escrow linking
-  await emitIncidentWebhook('incident.escrows_linked', incident, {
-    linkedEscrowIds: normalizedIds,
-    newlyLinked,
-    actor,
-    note,
-  });
-
-  return incident;
-}
-
-/**
- * Attaches a post-mortem to a resolved incident.
- *
- * @param {string} id
- * @param {object} postMortem
- * @returns {Incident}
- */
-export function attachPostMortem(id, postMortem) {
-  const incident = incidents.get(id);
-  if (!incident) throw new Error(`Incident ${id} not found`);
-  if (![Status.RESOLVED, Status.POST_MORTEM, Status.CLOSED].includes(incident.status)) {
-    throw new Error('Post-mortem can only be attached to resolved incidents');
-  }
-
-  incident.postMortem = {
-    ...postMortem,
-    attachedAt: new Date().toISOString(),
-  };
-  incident.updatedAt = new Date().toISOString();
-  incidents.set(id, incident);
-  return incident;
-}
-
-/**
- * Returns a single incident by ID.
- * @param {string} id
- * @returns {Incident}
- */
-export function getIncident(id) {
-  const incident = incidents.get(id);
-  if (!incident) throw new Error(`Incident ${id} not found`);
-  return incident;
-}
-
-/**
- * Returns all incidents, optionally filtered by status or severity.
- *
- * @param {{ status?: string, severity?: string }} [filters]
- * @returns {Incident[]}
- */
-export function listIncidents(filters = {}) {
-  let result = [...incidents.values()];
-  if (filters.status) result = result.filter((i) => i.status === filters.status);
-  if (filters.severity) result = result.filter((i) => i.severity === filters.severity);
-  return result.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
-}
-
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-/** Returns the default runbook URL for a given severity. */
-function resolvedRunbookUrl(severity) {
-  const base =
-    process.env.RUNBOOK_BASE_URL ||
-    'https://github.com/your-org/stellar-trust-escrow/blob/main/docs/incidents/runbooks';
-  const map = {
-    [Severity.SEV1]: `${base}/sev1-critical-outage.md`,
-    [Severity.SEV2]: `${base}/sev2-high-impact.md`,
-    [Severity.SEV3]: `${base}/sev3-degraded-performance.md`,
-    [Severity.SEV4]: `${base}/sev4-low-impact.md`,
-  };
-  return map[severity] ?? `${base}/general.md`;
-}
-
-/**
- * Resets incidents map for test suites
- */
-export function __resetForTests() {
-  incidents.clear();
-}
-
-export default {
-  createIncident,
-  updateIncidentStatus,
-  linkEscrowsToIncident,
-  buildIncidentWebhookPayload,
-  attachPostMortem,
-  getIncident,
-  listIncidents,
-  getCurrentOnCall,
-  getOnCallSchedule,
-  Severity,
-  Status,
-  __resetForTests,
-};
+/* … truncated 8089 chars — edit only what you need near the top … */
