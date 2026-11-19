@@ -368,3 +368,6 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for local setup, the Soroban toolchain, h
 
 <!-- handsoff-issue-336 -->
 - #336: Add fuzz coverage for insurance reserve solvency
+
+<!-- handsoff-issue-578 -->
+- #578: Check the rent-checkpoint multiply in `collect_rent_due`
