@@ -9272,6 +9272,101 @@ mod tests {
         assert!(matches!(result, Err(Ok(EscrowError::E59))));
     }
 
+    // ── Issue #633/#634: validation helpers are pure (no token transfer) ─────
+
+    #[test]
+    fn test_validate_oracle_resolve_dispute_rejects_before_transfer() {
+        let (env, admin, _, client) = setup();
+        client.initialize(&admin);
+
+        let escrow_client = Address::generate(&env);
+        let freelancer = Address::generate(&env);
+        let token_id = env
+            .register_stellar_asset_contract_v2(admin.clone())
+            .address();
+        let reserve = ContractStorage::reserve_for_entries(1);
+        token::StellarAssetClient::new(&env, &token_id).mint(&escrow_client, &(100_i128 + reserve));
+
+        let escrow_id = client.create_escrow(
+            &escrow_client,
+            &freelancer,
+            &token_id,
+            &100_i128,
+            &BytesN::from_array(&env, &[7u8; 32]),
+            &None,
+            &None,
+            &None,
+            &None,
+            &no_multisig(&env),
+            &None,
+        );
+
+        client.raise_dispute(&escrow_client, &escrow_id, &None);
+
+        let oracle_secret = [47u8; 32];
+        let oracle_pubkey = oracle_pubkey(&env, &oracle_secret);
+        client.set_trusted_oracle_key(&admin, &oracle_pubkey);
+
+        let grace = 7 * 24 * 60 * 60_u64;
+        advance(&env, grace + 1);
+
+        let expires_at = env.ledger().timestamp() + 3600;
+        // bps sum to 9999, not 10000 — rejected by the pure validation helper.
+        let (payload, _) =
+            make_oracle_payload(&env, escrow_id, 5000, 4999, expires_at, &oracle_secret);
+
+        let contract_id = client.address.clone();
+        let result = env.as_contract(&contract_id, || {
+            EscrowContract::validate_oracle_resolve_dispute(&env, escrow_id, &payload, grace)
+        });
+        assert!(matches!(result, Err(EscrowError::E59)));
+
+        // No token transfer occurred: balances are unchanged.
+        let token_client = token::Client::new(&env, &token_id);
+        assert_eq!(token_client.balance(&escrow_client), 0);
+        assert_eq!(token_client.balance(&freelancer), 0);
+    }
+
+    #[test]
+    fn test_validate_resolve_slash_dispute_rejects_before_transfer() {
+        let (env, admin, _, client) = setup();
+        client.initialize(&admin);
+
+        let escrow_client = Address::generate(&env);
+        let freelancer = Address::generate(&env);
+        let token_id = env
+            .register_stellar_asset_contract_v2(admin.clone())
+            .address();
+        let reserve = ContractStorage::reserve_for_entries(1);
+        token::StellarAssetClient::new(&env, &token_id).mint(&escrow_client, &(100_i128 + reserve));
+
+        let escrow_id = client.create_escrow(
+            &escrow_client,
+            &freelancer,
+            &token_id,
+            &100_i128,
+            &BytesN::from_array(&env, &[8u8; 32]),
+            &None,
+            &None,
+            &None,
+            &None,
+            &no_multisig(&env),
+            &None,
+        );
+
+        // No slash record / dispute exists yet — the pure validation helper
+        // must reject without touching token balances.
+        let contract_id = client.address.clone();
+        let result = env.as_contract(&contract_id, || {
+            EscrowContract::validate_resolve_slash_dispute(&env, escrow_id, &escrow_client)
+        });
+        assert!(result.is_err());
+
+        let token_client = token::Client::new(&env, &token_id);
+        assert_eq!(token_client.balance(&escrow_client), 0);
+        assert_eq!(token_client.balance(&freelancer), 0);
+    }
+
     #[test]
     fn test_oracle_resolve_dispute_rejected_wrong_key() {
         let (env, admin, _, client) = setup();

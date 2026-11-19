@@ -835,3 +835,69 @@ pub struct DexSwapRecord {
     /// Whether the swap was successful.
     pub success: bool,
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TESTS
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod timelock_roundtrip_tests {
+    use super::Timelock;
+    use soroban_sdk::{Env, IntoVal, TryFromVal, Val};
+
+    /// Asserts that a `Timelock` survives a ScVal round trip unchanged.
+    fn assert_roundtrip(env: &Env, original: &Timelock) {
+        let v: Val = original.clone().into_val(env);
+        let decoded = Timelock::try_from_val(env, &v)
+            .expect("Timelock must decode from its own ScVal encoding");
+
+        assert_eq!(
+            decoded.duration_ledger, original.duration_ledger,
+            "duration_ledger changed during ScVal round trip"
+        );
+        assert_eq!(
+            decoded.start_ledger, original.start_ledger,
+            "start_ledger changed during ScVal round trip"
+        );
+        assert_eq!(&decoded, original, "Timelock changed during ScVal round trip");
+    }
+
+    #[test]
+    fn timelock_scval_roundtrip() {
+        let env = Env::default();
+
+        // Zero / empty value for every numeric field.
+        let zero = Timelock {
+            duration_ledger: 0,
+            start_ledger: 0,
+        };
+        assert_roundtrip(&env, &zero);
+
+        // Non-zero value for every numeric field.
+        let non_zero = Timelock {
+            duration_ledger: 1_209_600,
+            start_ledger: 1_700_000_000,
+        };
+        assert_roundtrip(&env, &non_zero);
+
+        // Boundary values: max u64 for both fields.
+        let max = Timelock {
+            duration_ledger: u64::MAX,
+            start_ledger: u64::MAX,
+        };
+        assert_roundtrip(&env, &max);
+
+        // Mixed: zero duration with non-zero start, and vice versa.
+        let mixed_a = Timelock {
+            duration_ledger: 0,
+            start_ledger: 1_700_000_000,
+        };
+        assert_roundtrip(&env, &mixed_a);
+
+        let mixed_b = Timelock {
+            duration_ledger: 1_209_600,
+            start_ledger: 0,
+        };
+        assert_roundtrip(&env, &mixed_b);
+    }
+}
