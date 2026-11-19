@@ -174,12 +174,22 @@ function create(name) {
  * Version:   ${ts}_${slug}
  */
 
+const MIGRATION_FILE = '${filename}';
+
+function notImplemented(fn) {
+  throw new Error(
+    \`Migration \${MIGRATION_FILE} is not implemented: \${fn}() body is still the scaffold. \` +
+      'Replace the TODO with the actual migration logic before applying.',
+  );
+}
+
 /**
  * @param {import('@prisma/client').PrismaClient} prisma
  */
 export async function up(prisma) {
   // TODO: implement migration
   // await prisma.$executeRawUnsafe(\`ALTER TABLE ...\`);
+  notImplemented('up');
 }
 
 /**
@@ -188,6 +198,7 @@ export async function up(prisma) {
 export async function down(prisma) {
   // TODO: implement rollback
   // await prisma.$executeRawUnsafe(\`ALTER TABLE ...\`);
+  notImplemented('down');
 }
 `,
   );
