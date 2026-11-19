@@ -356,6 +356,39 @@ export async function buildRaiseDisputeTx({ sourceAddress, escrowId, milestoneId
  * 2. Backend submits to Stellar
  * 3. Return { hash, status }
  */
+
+/**
+ * Builds an unsigned `cancel_escrow` transaction XDR.
+ */
+export async function buildCancelEscrowTx({ sourceAddress, escrowId }) {
+  _validateInputs({ sourceAddress, escrowId });
+
+  const server = new SorobanRpc.Server(_SOROBAN_RPC_URL);
+  const account = await server.getAccount(sourceAddress);
+  const contract = new Contract(_CONTRACT_ADDRESS);
+  const txBuilder = new TransactionBuilder(account, {
+    fee: BASE_FEE,
+    networkPassphrase: _NETWORK_PASSPHRASE,
+  });
+
+  txBuilder.addOperation(
+    contract.call(
+      'cancel_escrow',
+      new Address(sourceAddress).toScVal(),
+      nativeToScVal(BigInt(escrowId), { type: 'u64' }),
+    ),
+  );
+
+  txBuilder.setTimeout(300);
+  const tx = txBuilder.build();
+  const prepared = await server.simulateTransaction(tx);
+  if (SorobanRpc.isSimulationError(prepared)) {
+    throw new Error(`Simulation failed: ${prepared.error}`);
+  }
+  const assembled = SorobanRpc.assembleTransaction(tx, prepared).build();
+  return assembled.toXDR('base64');
+}
+
 export async function broadcastTransaction(signedXdr) {
   const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/escrows/broadcast`, {
     method: 'POST',
