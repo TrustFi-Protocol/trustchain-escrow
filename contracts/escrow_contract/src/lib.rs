@@ -61,6 +61,7 @@ mod arbiter_reputation_tests;
 mod arbiter_validation_tests;
 mod auto_expiry;
 mod auto_expiry_tests;
+mod trigger_expiry_boundary_tests;
 mod batch_add_milestones_cap_tests;
 mod batch_approve_release_e2e_tests;
 mod bridge;
