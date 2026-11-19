@@ -70,6 +70,7 @@ mod creation_validation_tests;
 mod deployment_tests;
 mod dispute_evidence;
 mod dispute_evidence_tests;
+mod dispute_slash_boundary_tests;
 mod errors;
 mod escrow_template_tests;
 mod event_names;
