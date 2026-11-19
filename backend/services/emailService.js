@@ -30,14 +30,35 @@ function assertEmail(email) {
   return normalized;
 }
 
-function createUnsubscribeToken(email) {
-  return crypto
-    .createHmac(
-      'sha256',
-      process.env.EMAIL_UNSUBSCRIBE_SECRET || 'stellar-trust-escrow-email-secret',
-    )
-    .update(email)
+const UNSUBSCRIBE_TTL_MS = 1000 * 60 * 60 * 24 * 30;
+
+function unsubscribeSecret() {
+  return process.env.EMAIL_UNSUBSCRIBE_SECRET || 'stellar-trust-escrow-email-secret';
+}
+
+function createUnsubscribeToken(email, expiresAt = Date.now() + UNSUBSCRIBE_TTL_MS) {
+  const exp = String(expiresAt);
+  const mac = crypto
+    .createHmac('sha256', unsubscribeSecret())
+    .update(`${email}:${exp}`)
     .digest('hex');
+  return `${exp}.${mac}`;
+}
+
+function verifyUnsubscribeToken(email, token) {
+  const parts = String(token || '').split('.');
+  if (parts.length !== 2) throw new Error('Invalid unsubscribe token');
+  const [exp, mac] = parts;
+  const expiresAt = Number(exp);
+  if (!Number.isFinite(expiresAt) || expiresAt < Date.now()) {
+    throw new Error('Unsubscribe token expired');
+  }
+  const expected = crypto
+    .createHmac('sha256', unsubscribeSecret())
+    .update(`${email}:${exp}`)
+    .digest('hex');
+  if (expected !== mac) throw new Error('Invalid unsubscribe token');
+  return true;
 }
 
 async function ensurePreference(email) {
@@ -55,9 +76,7 @@ async function ensurePreference(email) {
 
 async function unsubscribe(email, token, reason = 'user_request') {
   const preference = await ensurePreference(email);
-  if (preference.unsubscribeToken !== token) {
-    throw new Error('Invalid unsubscribe token');
-  }
+  verifyUnsubscribeToken(preference.email, token);
   const updatedPreference = {
     ...preference,
     unsubscribedAt: new Date().toISOString(),
@@ -145,7 +164,7 @@ function resetEmailServiceForTests() {
   __resetForTests();
 }
 
-export { buildUnsubscribeUrl, getPreference, unsubscribe, resubscribe, start };
+export { buildUnsubscribeUrl, getPreference, unsubscribe, resubscribe, start, createUnsubscribeToken, verifyUnsubscribeToken };
 export {
   resetEmailServiceForTests as __resetForTests,
   getQueueSnapshot,

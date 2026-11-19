@@ -23,6 +23,7 @@ import { withRetry } from '../lib/transaction.js';
 import LockManager from '../services/lockManager.js';
 import { createModuleLogger } from '../config/logger.js';
 import { syncCid } from './ipfsSyncWorker.js';
+import * as Sentry from '@sentry/node';
 
 const logger = createModuleLogger('worker.escrowIndexer');
 
@@ -396,6 +397,10 @@ export async function startIndexer() {
     } catch (err) {
       metrics.rpcErrors++;
       logger.error({ message: 'indexer_tick_error', backoffMs: backoff, error: err.message });
+      Sentry.captureException(err, {
+        extra: { ledgerCursor: cursor, backoffMs: backoff },
+        tags: { component: 'escrow-indexer' },
+      });
       await new Promise((r) => setTimeout(r, backoff));
       backoff = Math.min(backoff * 2, MAX_BACKOFF_MS);
     } finally {

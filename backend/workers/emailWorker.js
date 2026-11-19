@@ -2,6 +2,7 @@ import { Worker } from 'bullmq';
 import crypto from 'crypto';
 import { connection } from '../queues/index.js';
 import { runWithCorrelation } from '../config/logger.js';
+import { createUnsubscribeToken } from '../services/emailService.js';
 
 import disputeRaisedTemplate from '../templates/emails/disputeRaised.js';
 import escrowStatusChangedTemplate from '../templates/emails/escrowStatusChanged.js';
@@ -129,7 +130,10 @@ const emailWorker = new Worker(
         const template = createTemplate(eventType, payload);
         const content = template({
           recipient,
-          unsubscribeUrl: `/api/notifications/unsubscribe?email=${encodeURIComponent(recipient.email)}&token=TOKEN_PLACEHOLDER`, // Migrate unsubscribe logic later
+          unsubscribeUrl: (() => {
+          const token = createUnsubscribeToken(recipient.email);
+          return `/api/notifications/unsubscribe?email=${encodeURIComponent(recipient.email)}&token=${encodeURIComponent(token)}`;
+        })(),
           fromName: config.fromName,
         });
 

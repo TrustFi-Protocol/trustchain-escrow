@@ -1,5 +1,5 @@
 import express from 'express';
-import emailService from '../../services/emailService.js';
+import emailService, { verifyUnsubscribeToken } from '../../services/emailService.js';
 import adminAuth from '../middleware/adminAuth.js';
 
 const router = express.Router();
@@ -55,6 +55,11 @@ router.get('/unsubscribe', async (req, res) => {
       return res.status(400).send('<h1>Missing email or token</h1>');
     }
 
+    try {
+      verifyUnsubscribeToken(String(email).trim().toLowerCase(), token);
+    } catch (e) {
+      return res.status(400).send(`<h1>${e.message}</h1>`);
+    }
     await emailService.unsubscribe(email, token, reason);
     return res
       .status(200)
@@ -71,6 +76,11 @@ router.post('/unsubscribe', async (req, res) => {
       return res.status(400).json({ error: 'email and token are required' });
     }
 
+    try {
+      verifyUnsubscribeToken(String(email).trim().toLowerCase(), token);
+    } catch (e) {
+      return res.status(400).json({ error: e.message });
+    }
     const preference = await emailService.unsubscribe(email, token, reason);
     return res.json({ email: preference.email, unsubscribedAt: preference.unsubscribedAt });
   } catch (error) {
