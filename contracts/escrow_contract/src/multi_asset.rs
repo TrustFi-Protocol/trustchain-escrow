@@ -191,3 +191,37 @@ mod tests {
         assert_eq!(alloc.token, addr);
     }
 }
+
+#[cfg(test)]
+mod scval_roundtrip_tests {
+    use super::AssetAllocation;
+    use soroban_sdk::{Address, Env, TryFromVal, Val};
+    use soroban_sdk::testutils::Address as _;
+
+    fn assert_scval_roundtrip<T>(env: &Env, original: &T)
+    where
+        T: soroban_sdk::IntoVal<Env, Val>
+            + soroban_sdk::TryFromVal<Env, Val>
+            + Clone
+            + core::fmt::Debug,
+    {
+        let serialised: Val = original.clone().into_val(env);
+        let decoded = T::try_from_val(env, &serialised).expect("ScVal round-trip must not fail");
+        assert_eq!(
+            format!("{original:?}"),
+            format!("{decoded:?}"),
+            "ScVal round-trip changed the value"
+        );
+    }
+
+    #[test]
+    fn asset_allocation_scval_roundtrip() {
+        let env = Env::default();
+        let token = Address::generate(&env);
+        let zero = AssetAllocation { token: token.clone(), amount: 0, released: 0 };
+        assert_scval_roundtrip(&env, &zero);
+        let nonzero = AssetAllocation { token, amount: 1000, released: 250 };
+        assert_scval_roundtrip(&env, &nonzero);
+    }
+
+}
