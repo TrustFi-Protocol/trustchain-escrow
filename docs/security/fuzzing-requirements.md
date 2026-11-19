@@ -258,6 +258,7 @@ Before opening a pull request that adds or modifies a contract function, confirm
 - [ ] Each fuzz target runs a minimum of 10,000 iterations.
 - [ ] State-mutating fuzz targets exercise boundary values: `0`, `i128::MAX`, `u32::MAX`.
 - [ ] Administrative fuzz targets assert `EscrowError::Unauthorized` or `EscrowError::AdminOnly` for arbitrary non-authorised callers.
+- [x] Round-trip unit tests: `RecurringPaymentConfig`, `RecurringScheduleStatus`, `SlashRecord`, `StateHistoryEntry`.
 - [ ] All `#[contracttype]` structs have a round-trip serialisation fuzz test (`from_val(env, &to_val(env, &x)) == x`).
 - [ ] If `cargo fuzz` discovered a panic during development, a regression `#[test]` reproducing the exact input has been added and passes after the fix.
 - [ ] All fuzz tests pass with `cargo test` before the pull request is submitted.
