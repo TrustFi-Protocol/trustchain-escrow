@@ -29,6 +29,7 @@ export const ALERT_TYPES = {
   DEAD_LETTER_QUEUE_FULL: 'dead_letter_queue_full',
   MEMORY_USAGE_HIGH: 'memory_usage_high',
   SYNC_LAG_HIGH: 'sync_lag_high',
+  PERMANENT_EVENT_FAILURE: 'PERMANENT_EVENT_FAILURE',
 };
 
 /**
@@ -290,52 +291,54 @@ export const alertRedisConnection = async (connected) => {
     await sendAlert({
       type: ALERT_TYPES.REDIS_CONNECTION_LOST,
       severity: ALERT_SEVERITY.CRITICAL,
-      message: 'Redis connection lost - queue processing will be affected',
+      message: 'Redis connection lost - queue processing may be affected',
       metadata: {
-        connectionStatus: connected,
+        timestamp: new Date().toISOString(),
       },
     });
   }
 };
 
 /**
- * Alert for queue processing stopped
- * @param {number} waitingJobs - Number of waiting jobs
- * @param {number} activeJobs - Number of active jobs
+ * Alert for a permanently failed event that has been parked in the dead-letter queue.
+ *
+ * Unlike the health monitors, this alert is critical and must not be swallowed:
+ * if the alert cannot be delivered the returned promise rejects so the caller
+ * (the dead-letter worker) does not acknowledge the job as handled.
+ *
+ * The alert body intentionally excludes the raw transaction payload and any
+ * secrets; only the attempt count and a redacted error message are included.
+ *
+ * @param {Object} params
+ * @param {number} params.attempts - Number of processing attempts made
+ * @param {Error|string} params.error - The failure that caused the job to be parked
+ * @returns {Promise<void>}
  */
-export const alertQueueProcessingStopped = async (waitingJobs, activeJobs) => {
-  if (waitingJobs > 0 && activeJobs === 0) {
-    await sendAlert({
-      type: ALERT_TYPES.QUEUE_PROCESSING_STOPPED,
-      severity: ALERT_SEVERITY.WARNING,
-      message: `Queue has ${waitingJobs} waiting jobs but no active processing`,
-      metadata: {
-        waitingJobs,
-        activeJobs,
-      },
-    });
-  }
+export const alertPermanentEventFailure = async ({ attempts, error } = {}) => {
+  const rawMessage = error instanceof Error ? error.message : String(error ?? 'Unknown error');
+  const redactedMessage = redactErrorMessage(rawMessage);
+
+  await sendAlert({
+    type: ALERT_TYPES.PERMANENT_EVENT_FAILURE,
+    severity: ALERT_SEVERITY.CRITICAL,
+    message: `Event permanently failed after ${attempts} attempt(s): ${redactedMessage}`,
+    metadata: {
+      attempts,
+      error: redactedMessage,
+    },
+  });
 };
 
 /**
- * Start the monitoring service
+ * Redact potentially sensitive values from an error message.
+ * Strips long hex/base64-like tokens and common secret key/value patterns.
+ *
+ * @param {string} message - Raw error message
+ * @returns {string} Redacted error message
  */
-export const startMonitoring = () => {
-  // Monitor every 30 seconds
-  setInterval(monitorQueueHealth, 30000);
-
-  console.log('[Alert] Queue monitoring service started');
-};
-
-// Export for testing
-export {
-  sendAlert,
-  shouldSendAlert,
-  markAlertSent,
-  consoleAlert,
-  emailAlert,
-  webhookAlert,
-  monitoringSystemAlert,
-  formatEmailAlert,
-  calculateSyncLag,
+const redactErrorMessage = (message) => {
+  return String(message)
+    .replace(/\b[A-Fa-f0-9]{32,}\b/g, '[redacted]')
+    .replace(/\b[A-Za-z0-9+/]{40,}={0,2}\b/g, '[redacted]')
+    .replace(/(secret|seed|private[_-]?key|token|password)\s*[:=]\s*\S+/gi, '$1=[redacted]');
 };

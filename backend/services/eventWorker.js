@@ -14,6 +14,23 @@ import {
   deadLetterQueue,
   queueMetrics,
 } from '../lib/queueConfig.js';
+import { sendAlert } from './alertService.js';
+
+/**
+ * Redacts sensitive values from an error message before it leaves the process.
+ * Strips seed phrases, secret keys, and long hex/base64 blobs.
+ * @param {string} message - Raw error message
+ * @returns {string} Redacted error message
+ */
+const redactErrorMessage = (message) => {
+  if (!message) return 'Unknown error';
+
+  return String(message)
+    .replace(/\bS[A-Z2-7]{55}\b/g, '[REDACTED_SECRET]')
+    .replace(/\b[0-9a-fA-F]{64,}\b/g, '[REDACTED_HEX]')
+    .replace(/\b[A-Za-z0-9+/]{40,}={0,2}\b/g, '[REDACTED_BLOB]')
+    .replace(/(seed|secret|private[_-]?key)\s*[:=]\s*\S+/gi, '$1=[REDACTED]');
+};
 
 /**
  * Processes a single Stellar event
@@ -168,11 +185,15 @@ const processDeadLetterEvent = async (job) => {
     // Log the failure for manual investigation
     await logPermanentFailure(originalJob, error, attemptsMade);
 
-    // TODO: Send alert to monitoring system
-    // await alertService.sendAlert({
-    //   type: 'PERMANENT_EVENT_FAILURE',
-    //   data: { originalJob, error, attemptsMade }
-    // });
+    // Notify operators. Only the attempt count and a redacted error message
+    // are sent — never the raw transaction payload or secrets.
+    await sendAlert({
+      type: 'PERMANENT_EVENT_FAILURE',
+      data: {
+        attemptsMade,
+        errorMessage: redactErrorMessage(error && error.message),
+      },
+    });
 
     console.log('[DeadLetter] Successfully logged permanent failure');
   } catch (logError) {
@@ -279,4 +300,5 @@ export {
   updateLastProcessedLedger,
   processDeadLetterEvent,
   logPermanentFailure,
+  redactErrorMessage,
 };
