@@ -42,6 +42,7 @@ import Avatar from '../../../components/ui/Avatar';
 import {
   buildApproveMilestoneTx,
   buildSubmitMilestoneTx,
+  buildRejectMilestoneTx,
   buildRaiseDisputeTx,
   broadcastTransaction,
 } from '../../../lib/stellar';
@@ -184,8 +185,24 @@ export default function EscrowDetailPage({ params }) {
     try {
       if (!address) throw new Error('Please connect your wallet first');
 
-      // TODO: Implement reject_milestone if not already in contract
-      showToast('Milestone rejection not yet implemented', 'warning');
+      const milestone = (escrow.milestones || []).find(
+        (m) => String(m.id) === String(milestoneId),
+      );
+      const rawHash = milestone?.descriptionHash?.replace(/^0x/i, '');
+      const reasonHash = /^[a-f0-9]{64}$/i.test(rawHash || '')
+        ? rawHash
+        : `${'0'.repeat(63)}1`;
+
+      const unsignedXdr = await buildRejectMilestoneTx({
+        sourceAddress: address,
+        escrowId: BigInt(id).toString(),
+        milestoneId: Number(milestoneId),
+        reasonHash,
+      });
+      const signedXdr = await signTx(unsignedXdr);
+      await broadcastTransaction(signedXdr);
+      showToast('Milestone rejected', 'success');
+      await mutate();
     } catch (err) {
       showToast(err.message || 'Failed to reject milestone', 'error');
     } finally {

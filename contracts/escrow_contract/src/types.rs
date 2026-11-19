@@ -835,3 +835,37 @@ pub struct DexSwapRecord {
     /// Whether the swap was successful.
     pub success: bool,
 }
+
+#[cfg(test)]
+mod scval_roundtrip_tests {
+    use super::ApprovalRecord;
+    use soroban_sdk::{Address, Env, TryFromVal, Val};
+    use soroban_sdk::testutils::Address as _;
+
+    fn assert_scval_roundtrip<T>(env: &Env, original: &T)
+    where
+        T: soroban_sdk::IntoVal<Env, Val>
+            + soroban_sdk::TryFromVal<Env, Val>
+            + Clone
+            + core::fmt::Debug,
+    {
+        let serialised: Val = original.clone().into_val(env);
+        let decoded = T::try_from_val(env, &serialised).expect("ScVal round-trip must not fail");
+        assert_eq!(
+            format!("{original:?}"),
+            format!("{decoded:?}"),
+            "ScVal round-trip changed the value"
+        );
+    }
+
+    #[test]
+    fn approval_record_scval_roundtrip() {
+        let env = Env::default();
+        let signer = Address::generate(&env);
+        let zero = ApprovalRecord { signer: signer.clone(), approved_at: 0 };
+        assert_scval_roundtrip(&env, &zero);
+        let nonzero = ApprovalRecord { signer, approved_at: 1_705_000_000 };
+        assert_scval_roundtrip(&env, &nonzero);
+    }
+
+}
