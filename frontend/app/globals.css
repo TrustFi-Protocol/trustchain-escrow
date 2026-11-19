@@ -141,16 +141,16 @@
     tone has to darken with it to hold 4.5:1 (WCAG 1.4.3).
   */
   .badge-active {
-    @apply bg-indigo-500/20 text-indigo-800 border border-indigo-500/30 dark:text-indigo-300;
+    @apply bg-green-500/20 text-green-800 border border-green-500/30 dark:text-green-300;
   }
   .badge-completed {
-    @apply bg-emerald-500/20 text-emerald-800 border border-emerald-500/30 dark:text-emerald-300;
+    @apply bg-blue-500/20 text-blue-800 border border-blue-500/30 dark:text-blue-300;
   }
   .badge-disputed {
-    @apply bg-amber-500/20 text-amber-800 border border-amber-500/30 dark:text-amber-300;
+    @apply bg-red-500/20 text-red-800 border border-red-500/30 dark:text-red-300;
   }
   .badge-cancelled {
-    @apply bg-red-500/20 text-red-800 border border-red-500/30 dark:text-red-300;
+    @apply bg-gray-500/20 text-gray-800 border border-gray-500/40 dark:bg-gray-700/50 dark:text-gray-300;
   }
 }
 
