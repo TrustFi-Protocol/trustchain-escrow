@@ -96,6 +96,8 @@ mod pause_tests;
 mod platform_fee;
 mod fuzz_tests;
 #[cfg(test)]
+mod boundary_view_tests;
+#[cfg(test)]
 mod gas_profiling;
 mod property_invariant_tests;
 mod reentrancy_guard_tests;
