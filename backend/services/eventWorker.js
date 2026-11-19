@@ -14,6 +14,8 @@ import {
   deadLetterQueue,
   queueMetrics,
 } from '../lib/queueConfig.js';
+import crypto from 'crypto';
+import prisma from '../lib/prisma.js';
 
 /**
  * Processes a single Stellar event
@@ -188,18 +190,19 @@ const processDeadLetterEvent = async (job) => {
  * @param {number} attemptsMade - Number of retry attempts
  */
 const logPermanentFailure = async (originalJob, error, attemptsMade) => {
+  const jobIdHash = crypto
+    .createHash('sha256')
+    .update(String(originalJob?.id ?? originalJob?.name ?? 'unknown'))
+    .digest('hex');
   try {
-    // TODO: Implement database logging
-    // await prisma.permanentFailure.create({
-    //   data: {
-    //     eventData: originalJob.data,
-    //     errorMessage: error.message,
-    //     errorStack: error.stack,
-    //     attemptsMade,
-    //     failedAt: new Date(),
-    //   }
-    // });
-
+    await prisma.permanentFailure.create({
+      data: {
+        jobIdHash,
+        errorMessage: error.message,
+        attemptsMade,
+        failedAt: new Date(),
+      },
+    });
     console.log('[DeadLetter] Permanent failure logged successfully');
   } catch (logError) {
     console.error('[DeadLetter] Error logging permanent failure:', logError);

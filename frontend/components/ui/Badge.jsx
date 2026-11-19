@@ -33,11 +33,13 @@ const STATUS_STYLES = {
   Completed: TONES.blue,
   Disputed: TONES.red,
   Cancelled: TONES.gray,
+  CancellationPending: TONES.amber,
 
   // Milestone statuses
   Pending: TONES.gray,
   Submitted: TONES.blue,
   Approved: TONES.green,
+  Released: TONES.blue,
   Rejected: TONES.red,
 
   // Reputation badges
@@ -65,9 +67,11 @@ const ICONS = {
   Completed: '✅',
   Disputed: '⚠️',
   Cancelled: '✕',
+  CancellationPending: '⏳',
   Pending: '○',
   Submitted: '📤',
   Approved: '✓',
+  Released: '💸',
   Rejected: '✗',
   TRUSTED: '🔵',
   VERIFIED: '💜',

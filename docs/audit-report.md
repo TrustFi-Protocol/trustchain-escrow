@@ -33,7 +33,7 @@ Medium and Low findings are tracked as follow-up issues.
 | STE-02 | Double-payment possible via `release_funds`        | Critical | Fixed      |
 | STE-03 | `approve_milestone` does not emit completion event | High     | Fixed      |
 | STE-04 | `remaining_balance` can underflow silently         | High     | Fixed      |
-| STE-05 | `upgrade` function is unimplemented (`todo!`)      | High     | Documented |
+| STE-05 | `upgrade` admin-gated WASM migration implemented     | High     | Fixed      |
 | STE-06 | No maximum milestone count enforced                | Medium   | Documented |
 | STE-07 | Deadline not enforced on milestone operations      | Low      | Documented |
 
@@ -205,29 +205,18 @@ Replaced `unwrap_or(0)` with `ok_or(EscrowError::AmountMismatch)?`.
 
 ---
 
-### STE-05 — `upgrade` function is unimplemented
+### STE-05 — `upgrade` function
 
-**Severity:** High
+**Severity:** High (resolved)
 **File:** `contracts/escrow_contract/src/lib.rs`
 **Function:** `upgrade`
 
-#### Description
+#### Status
 
-The `upgrade` function body is `todo!()`. Deploying this contract to
-mainnet without implementing upgrade means the contract can never be
-patched if a vulnerability is discovered post-deployment.
-
-#### Recommendation
-
-Implement `upgrade` before mainnet deployment (tracked as Issue #17).
-The implementation must:
-
-1. Verify `DataKey::Admin` exists (return `NotInitialized` if not)
-2. Call `caller.require_auth()`
-3. Assert `caller == admin`, else return `AdminOnly`
-4. Call `env.deployer().update_current_contract_wasm(new_wasm_hash)`
-
-This is a pre-deployment blocker.
+The `upgrade` entrypoint is implemented. It requires the stored admin (`caller.require_auth()`),
+runs `StorageManager::migrate`, bumps `ContractVersionInfo`, and calls
+`env.deployer().update_current_contract_wasm(new_wasm_hash)`. Non-admin callers receive
+`EscrowError::E87`.
 
 ---
 

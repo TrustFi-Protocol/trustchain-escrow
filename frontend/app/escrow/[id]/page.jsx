@@ -43,6 +43,7 @@ import {
   buildApproveMilestoneTx,
   buildSubmitMilestoneTx,
   buildRaiseDisputeTx,
+  buildCancelEscrowTx,
   broadcastTransaction,
 } from '../../../lib/stellar';
 import { isValidStellarTransactionHash } from '../../../../shared/stellarTransactionHash.js';
@@ -198,9 +199,15 @@ export default function EscrowDetailPage({ params }) {
     try {
       if (!address) throw new Error('Please connect your wallet first');
 
-      // TODO: Implement cancel_escrow if not already in contract
-      showToast('Escrow cancellation not yet implemented', 'warning');
+      const unsignedXdr = await buildCancelEscrowTx({
+        sourceAddress: address,
+        escrowId: BigInt(id).toString(),
+      });
+      const signedXdr = await signTx(unsignedXdr);
+      await broadcastTransaction(signedXdr);
+      showToast('Escrow cancelled', 'success');
       setCancelOpen(false);
+      await mutate();
     } catch (err) {
       showToast(err.message || 'Failed to cancel escrow', 'error');
     } finally {
