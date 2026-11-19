@@ -44,6 +44,7 @@ export default function MilestoneList({
   // Compute summary stats
   const approvedCount = milestones.filter((m) => m.status === 'Approved').length;
   const totalCount = milestones.length;
+  const approvedRatio = totalCount > 0 ? approvedCount / totalCount : 0;
 
   return (
     <div className="space-y-3">
@@ -68,25 +69,31 @@ export default function MilestoneList({
 
       {/* Milestone Items */}
       <div className="relative">
-        {/* Vertical connector line */}
-        {/*
-          TODO (contributor — Issue #40):
-          Add an absolute positioned ::before line connecting items,
-          with color indicating overall progress
-        */}
         <div className="space-y-3">
           {milestones.map((milestone, index) => (
-            <MilestoneItem
-              key={milestone.id}
-              milestone={milestone}
-              index={index}
-              role={role}
-              actionsDisabled={actionsDisabled}
-              onApprove={onApprove}
-              onReject={onReject}
-              onSubmit={onSubmit}
-              isLast={index === milestones.length - 1}
-            />
+            <div key={milestone.id}>
+              <MilestoneItem
+                milestone={milestone}
+                index={index}
+                role={role}
+                actionsDisabled={actionsDisabled}
+                onApprove={onApprove}
+                onReject={onReject}
+                onSubmit={onSubmit}
+                isLast={index === milestones.length - 1}
+              />
+              {index < milestones.length - 1 && (
+                <div
+                  aria-hidden="true"
+                  className="relative mx-auto my-1 h-6 w-1 bg-gray-800 rounded-full overflow-hidden"
+                >
+                  <div
+                    className="absolute inset-x-0 top-0 bg-gradient-to-b from-indigo-500 via-purple-500 to-pink-500 transition-all duration-700 ease-out"
+                    style={{ height: `${approvedRatio * 100}%` }}
+                  />
+                </div>
+              )}
+            </div>
           ))}
         </div>
       </div>
