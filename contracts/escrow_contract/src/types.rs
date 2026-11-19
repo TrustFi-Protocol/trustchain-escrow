@@ -835,3 +835,58 @@ pub struct DexSwapRecord {
     /// Whether the swap was successful.
     pub success: bool,
 }
+#[cfg(test)]
+mod scval_roundtrip_tests {
+    use super::{BytesN, FeeDelegation, FeeTier, MilestoneTemplate, String};
+    use soroban_sdk::{Address, Env, TryFromVal, Val};
+    use soroban_sdk::testutils::Address as _;
+    fn assert_scval_roundtrip<T>(env: &Env, original: &T)
+    where
+        T: soroban_sdk::IntoVal<Env, Val>
+            + soroban_sdk::TryFromVal<Env, Val>
+            + Clone
+            + core::fmt::Debug,
+    {
+        let serialised: Val = original.clone().into_val(env);
+        let decoded = T::try_from_val(env, &serialised).expect("ScVal round-trip must not fail");
+        assert_eq!(
+            format!("{original:?}"),
+            format!("{decoded:?}"),
+            "ScVal round-trip changed the value"
+        );
+    }
+
+
+    #[test]
+    fn fee_delegation_scval_roundtrip() {
+        let env = Env::default();
+        let payer = Address::generate(&env);
+        let token = Address::generate(&env);
+        assert_scval_roundtrip(&env, &FeeDelegation { fee_payer: payer.clone(), max_fee: 0, fee_token: token.clone() });
+        assert_scval_roundtrip(&env, &FeeDelegation { fee_payer: payer, max_fee: 100, fee_token: token });
+    }
+
+    #[test]
+    fn fee_tier_scval_roundtrip() {
+        let env = Env::default();
+        assert_scval_roundtrip(&env, &FeeTier { min_total_amount: 0, fee_bps: 0 });
+        assert_scval_roundtrip(&env, &FeeTier { min_total_amount: 1_000_000, fee_bps: 25 });
+    }
+
+    #[test]
+    fn milestone_template_scval_roundtrip() {
+        let env = Env::default();
+        assert_scval_roundtrip(&env, &MilestoneTemplate {
+            title: String::from_str(&env, ""),
+            description_hash: BytesN::from_array(&env, &[0u8; 32]),
+            amount: 0,
+        });
+        assert_scval_roundtrip(&env, &MilestoneTemplate {
+            title: String::from_str(&env, "deliverable"),
+            description_hash: BytesN::from_array(&env, &[9u8; 32]),
+            amount: 250,
+        });
+    }
+
+
+}

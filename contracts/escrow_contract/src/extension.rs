@@ -141,3 +141,43 @@ mod tests {
         assert_eq!(req.new_deadline, 1000);
     }
 }
+
+#[cfg(test)]
+mod scval_roundtrip_tests {
+    use super::ExtensionRequest;
+    use soroban_sdk::{Env, TryFromVal, Val};
+
+    fn assert_scval_roundtrip<T>(env: &Env, original: &T)
+    where
+        T: soroban_sdk::IntoVal<Env, Val>
+            + soroban_sdk::TryFromVal<Env, Val>
+            + Clone
+            + core::fmt::Debug,
+    {
+        let serialised: Val = original.clone().into_val(env);
+        let decoded = T::try_from_val(env, &serialised).expect("ScVal round-trip must not fail");
+        assert_eq!(
+            format!("{original:?}"),
+            format!("{decoded:?}"),
+            "ScVal round-trip changed the value"
+        );
+    }
+
+    #[test]
+    fn extension_request_scval_roundtrip() {
+        let env = Env::default();
+        assert_scval_roundtrip(&env, &ExtensionRequest {
+            new_deadline: 0,
+            client_consented: false,
+            freelancer_consented: false,
+            requested_at: 0,
+        });
+        assert_scval_roundtrip(&env, &ExtensionRequest {
+            new_deadline: 99,
+            client_consented: true,
+            freelancer_consented: true,
+            requested_at: 12,
+        });
+    }
+
+}
