@@ -141,17 +141,57 @@ const SEED_DATA = {
   ],
 };
 
+// ── Database safety guard ─────────────────────────────────────────────────────
+// Refuse to run against anything that is not clearly a local or testnet DB.
+// This prevents accidentally seeding a production database.
+
+const LOCAL_DB_PATTERNS = [
+  /localhost/i,
+  /127\.0\.0\.1/,
+  /\b0\.0\.0\.0\b/,
+  /testnet/i,
+  /_test\b/i,
+  /\btest\b/i,
+  /\bdev\b/i,
+];
+
+function assertSafeDatabaseUrl(databaseUrl) {
+  if (!databaseUrl) {
+    throw new Error(
+      'DATABASE_URL is not set. Refusing to seed without a configured database.',
+    );
+  }
+  const isSafe = LOCAL_DB_PATTERNS.some((pattern) => pattern.test(databaseUrl));
+  if (!isSafe) {
+    throw new Error(
+      'Refusing to seed: DATABASE_URL does not look like a local or testnet database. ' +
+        'Set DATABASE_URL to a localhost/testnet database before running the seed script.',
+    );
+  }
+}
+
+async function loadPrisma() {
+  try {
+    const mod = await import('@prisma/client');
+    const PrismaClient = mod.PrismaClient ?? mod.default?.PrismaClient;
+    if (!PrismaClient) return null;
+    return new PrismaClient();
+  } catch {
+    return null;
+  }
+}
+
 async function seed() {
   console.log('🌱 Seeding database…\n');
+
+  const prisma = await loadPrisma();
 
   // ── Idempotency guard ─────────────────────────────────────────────────────
   // Running seed twice in CI can produce duplicate-key errors or corrupt test
   // baseline data. The guard checks for existing rows before writing and
   // aborts unless --force is passed, making the script safe to run in pipelines.
 
-  // TODO (contributor — Issue #44): uncomment when Prisma is installed
-  /*
-  if (!forceReseed) {
+  if (!forceReseed && prisma) {
     const existingCount = await prisma.escrow.count();
     if (existingCount > 0) {
       console.log(`ℹ️  Database already contains ${existingCount} escrow(s).`);
@@ -168,6 +208,20 @@ async function seed() {
     console.log(`  Extra escrows (--count): ${extraCount}`);
     return;
   }
+
+  if (!prisma) {
+    console.log('⚠️  Prisma client is not available — no writes performed.');
+    console.log('\nSeed data preview:');
+    console.log(`  Escrows (fixtures):      ${SEED_DATA.escrows.length}`);
+    console.log(`  Milestones (fixtures):   ${SEED_DATA.milestones.length}`);
+    console.log(`  Reputation (fixtures):   ${SEED_DATA.reputationRecords.length}`);
+    console.log(`  Extra escrows (--count): ${extraCount}`);
+    console.log('');
+    console.log('✅ Done');
+    return;
+  }
+
+  assertSafeDatabaseUrl(process.env.DATABASE_URL);
 
   await prisma.$transaction(async (tx) => {
     if (forceReseed) {
@@ -206,16 +260,9 @@ async function seed() {
     }
     console.log(`   ✅ Upserted ${SEED_DATA.reputationRecords.length} reputation records`);
   });
-  */
 
-  console.log('⚠️  Seed logic is stubbed — see Issue #44 to implement');
-  console.log('\nSeed data preview:');
-  console.log(`  Escrows (fixtures):      ${SEED_DATA.escrows.length}`);
-  console.log(`  Milestones (fixtures):   ${SEED_DATA.milestones.length}`);
-  console.log(`  Reputation (fixtures):   ${SEED_DATA.reputationRecords.length}`);
-  console.log(`  Extra escrows (--count): ${extraCount}`);
-  console.log(`  Dry-run:                 ${isDryRun}`);
-  console.log(`  Force re-seed:           ${forceReseed}`);
+  await prisma.$disconnect();
+
   console.log('');
   console.log('✅ Done');
 }
