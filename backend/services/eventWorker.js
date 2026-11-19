@@ -15,6 +15,7 @@ import {
   queueMetrics,
 } from '../lib/queueConfig.js';
 import { sendAlert } from './alertService.js';
+import { prisma } from '../lib/prisma.js';
 
 /**
  * Redacts sensitive values from an error message before it leaves the process.
@@ -156,12 +157,11 @@ const processEventByType = async (eventType, event, ledger) => {
  */
 const updateLastProcessedLedger = async (ledger) => {
   try {
-    // TODO: Implement database update
-    // await prisma.indexerState.upsert({
-    //   where: { id: 1 },
-    //   update: { lastProcessedLedger: ledger },
-    //   create: { id: 1, lastProcessedLedger: ledger },
-    // });
+    await prisma.indexerState.upsert({
+      where: { id: 1 },
+      update: { lastProcessedLedger: ledger },
+      create: { id: 1, lastProcessedLedger: ledger },
+    });
 
     console.log(`[Worker] Updated last processed ledger to ${ledger}`);
   } catch (error) {
@@ -272,9 +272,9 @@ export const createEventWorker = () => {
  * Create and configure the dead letter queue worker
  */
 export const createDeadLetterWorker = () => {
-  const worker = new Worker('stellar-events-dead-letter', processDeadLetterEvent, {
+  const worker = new Worker('dead-letter-events', processDeadLetterEvent, {
     connection,
-    concurrency: 2, // Lower concurrency for dead letter processing
+    concurrency: 1,
   });
 
   worker.on('completed', (job) => {
@@ -282,23 +282,10 @@ export const createDeadLetterWorker = () => {
   });
 
   worker.on('failed', (job, err) => {
-    console.error(`[DeadLetter] Job ${job.id} failed:`, err);
-  });
-
-  worker.on('error', (err) => {
-    console.error('[DeadLetter] Worker error:', err);
+    console.error(`[DeadLetter] Job ${job.id} failed:`, err.message);
   });
 
   return worker;
 };
 
-// Export functions for testing
-export {
-  processStellarEvent,
-  parseEventType,
-  processEventByType,
-  updateLastProcessedLedger,
-  processDeadLetterEvent,
-  logPermanentFailure,
-  redactErrorMessage,
-};
+export { updateLastProcessedLedger };
