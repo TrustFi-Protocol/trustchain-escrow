@@ -217,3 +217,40 @@ pub fn convert_amount(
 fn is_fresh(data: &PriceData, now: u64, threshold: u64) -> bool {
     now.saturating_sub(data.timestamp) <= threshold
 }
+
+#[cfg(test)]
+mod scval_roundtrip_tests {
+    use super::{PriceData, PriceFeed};
+    use soroban_sdk::{Env, TryFromVal, Val};
+
+    fn assert_scval_roundtrip<T>(env: &Env, original: &T)
+    where
+        T: soroban_sdk::IntoVal<Env, Val>
+            + soroban_sdk::TryFromVal<Env, Val>
+            + Clone
+            + core::fmt::Debug,
+    {
+        let serialised: Val = original.clone().into_val(env);
+        let decoded = T::try_from_val(env, &serialised).expect("ScVal round-trip must not fail");
+        assert_eq!(
+            format!("{original:?}"),
+            format!("{decoded:?}"),
+            "ScVal round-trip changed the value"
+        );
+    }
+
+    #[test]
+    fn price_data_scval_roundtrip() {
+        let env = Env::default();
+        assert_scval_roundtrip(&env, &PriceData { price: 0, timestamp: 0 });
+        assert_scval_roundtrip(&env, &PriceData { price: 1_200_000, timestamp: 42 });
+    }
+
+    #[test]
+    fn price_feed_scval_roundtrip() {
+        let env = Env::default();
+        assert_scval_roundtrip(&env, &PriceFeed { price_micro_usd: 0, timestamp: 0 });
+        assert_scval_roundtrip(&env, &PriceFeed { price_micro_usd: 2_000_000, timestamp: 99 });
+    }
+
+}
