@@ -835,3 +835,118 @@ pub struct DexSwapRecord {
     /// Whether the swap was successful.
     pub success: bool,
 }
+#[cfg(test)]
+mod scval_roundtrip_tests {
+    use super::{BytesN, EscrowFeeSnapshot, EscrowState, EscrowStatus, EscrowTemplate, MilestoneTemplate, OptionalTimelock, String};
+    use soroban_sdk::{Address, Env, TryFromVal, Val};
+    use soroban_sdk::testutils::Address as _;
+    fn assert_scval_roundtrip<T>(env: &Env, original: &T)
+    where
+        T: soroban_sdk::IntoVal<Env, Val>
+            + soroban_sdk::TryFromVal<Env, Val>
+            + Clone
+            + core::fmt::Debug,
+    {
+        let serialised: Val = original.clone().into_val(env);
+        let decoded = T::try_from_val(env, &serialised).expect("ScVal round-trip must not fail");
+        assert_eq!(
+            format!("{original:?}"),
+            format!("{decoded:?}"),
+            "ScVal round-trip changed the value"
+        );
+    }
+
+
+    #[test]
+    fn escrow_fee_snapshot_scval_roundtrip() {
+        let env = Env::default();
+        assert_scval_roundtrip(&env, &EscrowFeeSnapshot { fee_bps: 0, fee_amount: 0, collected: false });
+        assert_scval_roundtrip(&env, &EscrowFeeSnapshot { fee_bps: 25, fee_amount: 50, collected: true });
+    }
+
+    #[test]
+    fn escrow_state_scval_roundtrip() {
+        let env = Env::default();
+        let client = Address::generate(&env);
+        let freelancer = Address::generate(&env);
+        let token = Address::generate(&env);
+        let milestones = soroban_sdk::Vec::<crate::Milestone>::new(&env);
+        let buyers = soroban_sdk::Vec::<Address>::new(&env);
+        let approvers = soroban_sdk::Vec::<Address>::new(&env);
+        let weights = soroban_sdk::Vec::<u32>::new(&env);
+        let brief = BytesN::from_array(&env, &[0u8; 32]);
+        let minimal = EscrowState {
+            escrow_id: 0,
+            client: client.clone(),
+            freelancer: freelancer.clone(),
+            token: token.clone(),
+            total_amount: 0,
+            remaining_balance: 0,
+            status: EscrowStatus::Active,
+            milestones: milestones.clone(),
+            arbiter: None,
+            buyer_signers: buyers.clone(),
+            created_at: 0,
+            deadline: None,
+            lock_time: None,
+            lock_time_extension: None,
+            timelock: OptionalTimelock::None,
+            dispute_timeout_ledger: None,
+            dispute_started_ledger: None,
+            brief_hash: brief.clone(),
+            multisig_approvers: approvers.clone(),
+            multisig_weights: weights.clone(),
+            multisig_threshold: 0,
+        };
+        assert_scval_roundtrip(&env, &minimal);
+        let full = EscrowState {
+            escrow_id: 3,
+            client,
+            freelancer,
+            token,
+            total_amount: 1000,
+            remaining_balance: 500,
+            status: EscrowStatus::Disputed,
+            milestones,
+            arbiter: None,
+            buyer_signers: buyers,
+            created_at: 10,
+            deadline: Some(99),
+            lock_time: Some(50),
+            lock_time_extension: Some(60),
+            timelock: OptionalTimelock::None,
+            dispute_timeout_ledger: Some(5),
+            dispute_started_ledger: Some(1),
+            brief_hash: brief,
+            multisig_approvers: approvers,
+            multisig_weights: weights,
+            multisig_threshold: 2,
+        };
+        assert_scval_roundtrip(&env, &full);
+    }
+
+    #[test]
+    fn escrow_template_scval_roundtrip() {
+        let env = Env::default();
+        let creator = Address::generate(&env);
+        let empty_ms = soroban_sdk::Vec::<MilestoneTemplate>::new(&env);
+        let empty_name = String::from_str(&env, "");
+        let zero = EscrowTemplate { id: 0, creator: creator.clone(), name: empty_name, milestones: empty_ms.clone() };
+        assert_scval_roundtrip(&env, &zero);
+        let mut milestones = empty_ms;
+        milestones.push_back(MilestoneTemplate {
+            title: String::from_str(&env, "m1"),
+            description_hash: BytesN::from_array(&env, &[1u8; 32]),
+            amount: 10,
+        });
+        let one = EscrowTemplate {
+            id: 1,
+            creator,
+            name: String::from_str(&env, "starter"),
+            milestones,
+        };
+        assert_scval_roundtrip(&env, &one);
+    }
+
+
+}
