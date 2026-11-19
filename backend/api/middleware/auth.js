@@ -34,3 +34,42 @@ export default async function authMiddleware(req, res, next) {
     return res.status(401).json({ error: 'Invalid token' });
   }
 }
+
+/**
+ * Admin Auth Middleware
+ *
+ * Guards admin-only surfaces (e.g. the queue dashboard mounted outside /api).
+ * Accepts the existing admin credential: either a resolved admin context
+ * (req.isAdmin) or a Bearer JWT whose payload carries the admin flag/role.
+ * Returns 401 when no valid admin credential is present so downstream
+ * mutating handlers (pause/retry/clean) are never invoked.
+ */
+export async function adminAuthMiddleware(req, res, next) {
+  if (req.isAdmin) {
+    req.user = req.user ?? { address: req.adminId ?? 'admin' };
+    return next();
+  }
+
+  const authHeader = req.headers.authorization;
+  if (!authHeader?.startsWith('Bearer ')) {
+    return res.status(401).json({ error: 'Authentication required' });
+  }
+  try {
+    const payload = jwt.verify(authHeader.slice(7), JWT_SECRET, { algorithms: [JWT_ALGORITHM] });
+    if (payload.jti) {
+      const valid = await sessionService.isSessionValid(payload.jti);
+      if (!valid) {
+        return res.status(401).json({ error: 'Session revoked or expired. Please log in again.' });
+      }
+    }
+    const isAdmin = payload.isAdmin === true || payload.role === 'admin';
+    if (!isAdmin) {
+      return res.status(401).json({ error: 'Admin credential required' });
+    }
+    req.user = { address: payload.address, jti: payload.jti };
+    next();
+  } catch (err) {
+    if (err.name === 'TokenExpiredError') return res.status(401).json({ error: 'Token expired' });
+    return res.status(401).json({ error: 'Invalid token' });
+  }
+}

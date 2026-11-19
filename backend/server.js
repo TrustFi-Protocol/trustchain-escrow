@@ -207,154 +207,56 @@ app.use('/api/webhooks', webhookRoutes);
 app.use('/api/kyc', kycRoutes);
 app.use('/api/payments', paymentRoutes);
 app.use('/api/relayer', relayerRoutes);
+app.use('/api/admin', adminRoutes);
 app.use('/api/audit', auditRoutes);
 app.use('/api/compliance', complianceRoutes);
 app.use('/api/incidents', incidentRoutes);
-app.use('/api/admin', adminRoutes);
 app.use('/api/batch', batchRoutes);
-app.use('/api/search', searchRoutes);
 app.use('/api/chat', chatRoutes);
 app.use('/api/expiry', expiryRoutes);
+app.use('/api/search', searchRoutes);
+app.use('/api/docs', docsRouter);
+
+// ── Queue Dashboard ───────────────────────────────────────────────────────────
+// Mounted outside /api, so it must enforce its own admin auth (see route module).
 app.use('/admin/queues', queueDashboardRoutes);
-app.use('/docs', docsRouter);
-// Alias — acceptance criteria requires /api-docs
-app.use('/api-docs', docsRouter);
 
-// ── Example: Deprecated API Version ───────────────────────────────────────────
-// Uncomment to deprecate unversioned endpoints in favor of /api/v1
-// app.use('/api', deprecateVersion(deprecationPresets.legacyUnversioned));
-
-// ── 404 handler ───────────────────────────────────────────────────────────────
-app.use((req, res) => {
-  getLogger().warn({
-    message: 'http_not_found',
-    method: req.method,
-    path: req.originalUrl?.split('?')[0],
-  });
-  res.status(404).json({ error: 'Route not found' });
-});
-
-// ── Sentry error handler — must be before the generic error handler ───────────
-// Captures unhandled Express errors and attaches request context.
+// ── Error Handling ────────────────────────────────────────────────────────────
 app.use(sentryErrorHandler);
-
-// ── Generic error handler ─────────────────────────────────────────────────────
-
-app.use((err, req, res, _next) => {
-  const statusCode = err.statusCode || 500;
-
-  // Attach Sentry event ID to response so support can correlate reports
-  const sentryId = res.sentry;
-  const body = { error: err.message || 'Internal server error' };
-  if (sentryId) body.errorId = sentryId;
-
-  const log = req?.log || logger;
-  log.error(
-    {
-      err,
-      statusCode,
-      requestId: req?.id,
-      route: req?.path || 'unknown',
-      userId: req?.user?.userId,
-    },
-    'Unhandled error',
-  );
-
-  if (statusCode >= 500) {
-    Sentry.captureException(err);
-  }
-
-  errorsTotal.inc({ type: err.name || 'Error', route: req?.path || 'unknown' });
-  res.status(statusCode).json(body);
+app.use((err, _req, res, _next) => {
+  errorsTotal.inc({ type: err.name || 'Error' });
+  getLogger().error({
+    message: 'unhandled_error',
+    error: err.message,
+    stack: err.stack,
+  });
+  res.status(err.statusCode || 500).json({
+    error: err.message || 'Internal server error',
+  });
 });
 
 const server = http.createServer(app);
 createWebSocketServer(server);
 
-async function startServer() {
-  return new Promise((resolve, reject) => {
-    server.listen(PORT, async () => {
-      try {
-        startConnectionMonitoring(prisma);
-        // Load secrets first — merges vault/env secrets into process.env
-        await initSecrets();
+async function start() {
+  await initSecrets();
+  await startConnectionMonitoring();
+  await ensureIndex();
+  await syncFromPrisma();
+  startIndexer();
+  startRpcMonitor();
+  createEventWorker();
+  createDeadLetterWorker();
+  startExpiryJob();
 
-        // ── Stellar / Soroban env validation ───────────────────────────────
-        if (!process.env.SOROBAN_RPC_URL) {
-          throw new Error(
-            '[Config] SOROBAN_RPC_URL is not set. The indexer and broadcast endpoint require a Soroban RPC endpoint.',
-          );
-        }
-        if (
-          process.env.STELLAR_NETWORK === 'testnet' &&
-          process.env.NODE_ENV !== 'development' &&
-          process.env.NODE_ENV !== 'test'
-        ) {
-          throw new Error(
-            `[Config] STELLAR_NETWORK=testnet is not allowed in NODE_ENV=${process.env.NODE_ENV}. Set STELLAR_NETWORK=mainnet for production deployments.`,
-          );
-        }
-        logger.info(
-          { secretsBackend: process.env.SECRETS_BACKEND || 'env' },
-          'Secrets backend loaded',
-        );
-        logger.info({ port: PORT, network: process.env.STELLAR_NETWORK }, 'API server started');
-        await emailService.start();
-        logger.info('[EmailService] Queue processor started');
-        complianceService.startScheduler();
-        logger.info('[ComplianceService] Scheduler started');
-        logger.info('[WebSocket] Server attached');
-
-        try {
-          const eventWorker = createEventWorker();
-          const deadLetterWorker = createDeadLetterWorker();
-          logger.info('[BullMQ] Event processing workers started');
-
-          const closeWorkers = async () => {
-            logger.info('[BullMQ] Shutting down workers...');
-            await eventWorker.close();
-            await deadLetterWorker.close();
-          };
-
-          process.once('SIGTERM', closeWorkers);
-          process.once('SIGINT', closeWorkers);
-        } catch (error) {
-          logger.error({ err: error }, '[BullMQ] Failed to start workers');
-          Sentry.captureException(error, { tags: { component: 'bullmq-workers' } });
-        }
-
-        startIndexer().catch((err) => {
-          logger.error({ err, component: 'indexer' }, 'Indexer failed to start');
-          Sentry.captureException(err, { tags: { component: 'indexer' } });
-        });
-        startRpcMonitor();
-        startExpiryJob();
-        logger.info('[ExpiryJob] Background auto-expiry started');
-
-        // Reputation ES sync — ensure index + initial sync on startup
-        ensureIndex().then(() =>
-          syncFromPrisma().catch((err) =>
-            logger.warn({ err }, '[ReputationSearch] Initial sync failed'),
-          ),
-        );
-        resolve(server);
-      } catch (error) {
-        reject(error);
-      }
-    });
+  server.listen(PORT, () => {
+    logger.info({ message: 'server_started', port: PORT });
   });
 }
 
-if (
-  process.env.NODE_ENV !== 'test' &&
-  process.argv[1] &&
-  import.meta.url === new URL(`file://${process.argv[1]}`).href
-) {
-  startServer().catch((error) => {
-    logger.error({ err: error }, 'Failed to start API server');
-    process.exitCode = 1;
-  });
-}
+start().catch((error) => {
+  logger.error({ message: 'server_start_failed', error: error.message, stack: error.stack });
+  process.exit(1);
+});
 
-export default app;
-export { server, startServer };
+export { app, server };
