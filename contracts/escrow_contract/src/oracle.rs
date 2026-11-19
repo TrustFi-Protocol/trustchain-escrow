@@ -217,3 +217,57 @@ pub fn convert_amount(
 fn is_fresh(data: &PriceData, now: u64, threshold: u64) -> bool {
     now.saturating_sub(data.timestamp) <= threshold
 }
+
+#[cfg(test)]
+mod usd_milestone_roundtrip_tests {
+    use super::*;
+    use soroban_sdk::{Env, IntoVal, TryFromVal, Val};
+
+    fn assert_roundtrip(env: &Env, original: &UsdMilestone) {
+        let val: Val = original.clone().into_val(env);
+        let decoded: UsdMilestone =
+            UsdMilestone::try_from_val(env, &val).expect("UsdMilestone should decode from ScVal");
+
+        assert_eq!(decoded.id, original.id, "id changed during round trip");
+        assert_eq!(
+            decoded.amount_micro_usd, original.amount_micro_usd,
+            "amount_micro_usd changed during round trip"
+        );
+        assert_eq!(
+            decoded.completed, original.completed,
+            "completed changed during round trip"
+        );
+        assert_eq!(decoded.id, original.id);
+        assert_eq!(decoded.amount_micro_usd, original.amount_micro_usd);
+        assert_eq!(decoded.completed, original.completed);
+    }
+
+    #[test]
+    fn usd_milestone_scval_roundtrip() {
+        let env = Env::default();
+
+        // Zero / empty value.
+        let zero = UsdMilestone {
+            id: 0,
+            amount_micro_usd: 0,
+            completed: false,
+        };
+        assert_roundtrip(&env, &zero);
+
+        // Non-zero value with completed = true.
+        let non_zero = UsdMilestone {
+            id: 7,
+            amount_micro_usd: 500_000_000,
+            completed: true,
+        };
+        assert_roundtrip(&env, &non_zero);
+
+        // Non-zero amounts with completed = false (bool covered both ways).
+        let non_zero_incomplete = UsdMilestone {
+            id: 42,
+            amount_micro_usd: 1_200_000,
+            completed: false,
+        };
+        assert_roundtrip(&env, &non_zero_incomplete);
+    }
+}
