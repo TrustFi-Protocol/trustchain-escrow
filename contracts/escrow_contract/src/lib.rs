@@ -109,6 +109,7 @@ mod timelock_enforcement_tests;
 mod token_whitelist_tests;
 mod transfer_client_tests;
 mod types;
+mod validation;
 mod simulation;
 mod simulation_tests;
 mod terms_hash;
