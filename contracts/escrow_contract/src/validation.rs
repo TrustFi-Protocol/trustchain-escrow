@@ -25,10 +25,10 @@ pub const MAX_ESCROW_AMOUNT: i128 = i128::MAX / 2;
 /// Validate that an amount is strictly positive and within safe bounds.
 pub fn validate_amount(amount: i128) -> Result<(), EscrowError> {
     if amount <= 0 {
-        return Err(EscrowError::InvalidAmount);
+        return Err(EscrowError::E17);
     }
     if amount > MAX_ESCROW_AMOUNT {
-        return Err(EscrowError::AmountOverflow);
+        return Err(EscrowError::E85);
     }
     Ok(())
 }
@@ -46,7 +46,7 @@ pub fn validate_deadline(env: &Env, deadline: Option<u64>) -> Result<(), EscrowE
     if let Some(dl) = deadline {
         let now = env.ledger().timestamp();
         if dl <= now {
-            return Err(EscrowError::DeadlineInPast);
+            return Err(EscrowError::E19);
         }
     }
     Ok(())
@@ -57,7 +57,7 @@ pub fn validate_lock_time(env: &Env, lock_time: Option<u64>) -> Result<(), Escro
     if let Some(lt) = lock_time {
         let now = env.ledger().timestamp();
         if lt <= now {
-            return Err(EscrowError::LockTimeInPast);
+            return Err(EscrowError::E30);
         }
     }
     Ok(())
@@ -66,10 +66,10 @@ pub fn validate_lock_time(env: &Env, lock_time: Option<u64>) -> Result<(), Escro
 /// Validate milestone title length.
 pub fn validate_title(title: &String) -> Result<(), EscrowError> {
     if title.len() == 0 {
-        return Err(EscrowError::TitleEmpty);
+        return Err(EscrowError::E55);
     }
     if title.len() > MAX_TITLE_LENGTH {
-        return Err(EscrowError::TitleTooLong);
+        return Err(EscrowError::E55);
     }
     Ok(())
 }
@@ -88,7 +88,7 @@ pub fn validate_distinct_parties(
 /// Validate that the number of buyer signers does not exceed the cap.
 pub fn validate_signer_count(count: u32) -> Result<(), EscrowError> {
     if count > MAX_BUYER_SIGNERS {
-        return Err(EscrowError::TooManySigners);
+        return Err(EscrowError::MultisigTooManySigners);
     }
     Ok(())
 }
@@ -154,5 +154,42 @@ mod tests {
     #[test]
     fn test_validate_signer_count_exceeds_cap() {
         assert!(validate_signer_count(MAX_BUYER_SIGNERS + 1).is_err());
+    }
+
+    // ── Caller and bound checks (#667, #668) ─────────────────────────────────
+
+    use soroban_sdk::testutils::Address as _;
+
+    /// #667: `validate_distinct_parties` needs no auth; the same address
+    /// twice returns the crate's error, two different addresses pass.
+    #[test]
+    fn test_validate_distinct_parties_caller_and_bounds() {
+        let env = Env::default();
+        let a = soroban_sdk::Address::generate(&env);
+        let b = soroban_sdk::Address::generate(&env);
+        assert_eq!(validate_distinct_parties(&a, &b), Ok(()));
+        assert_eq!(validate_distinct_parties(&b, &a), Ok(()));
+        assert_eq!(validate_distinct_parties(&a, &a), Err(EscrowError::E3));
+        assert_eq!(
+            validate_distinct_parties(&a, &a.clone()),
+            Err(EscrowError::E3)
+        );
+        assert!(env.auths().is_empty());
+    }
+
+    /// #668: `validate_signer_count` at 0, the cap, one past it and
+    /// `u32::MAX` returns a value or the crate's error, never a panic.
+    #[test]
+    fn test_validate_signer_count_caller_and_bounds() {
+        assert_eq!(validate_signer_count(0), Ok(()));
+        assert_eq!(validate_signer_count(MAX_BUYER_SIGNERS), Ok(()));
+        assert_eq!(
+            validate_signer_count(MAX_BUYER_SIGNERS + 1),
+            Err(EscrowError::MultisigTooManySigners)
+        );
+        assert_eq!(
+            validate_signer_count(u32::MAX),
+            Err(EscrowError::MultisigTooManySigners)
+        );
     }
 }
