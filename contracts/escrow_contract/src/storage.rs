@@ -257,6 +257,8 @@ impl StorageManager {
                     slippage_reference_price: 0,
                     terms_hash: crate::OptionalBytesN32::None,
                     arbiter_fee_bps: 0,
+                    required_freelancer_stake: 0,
+                    stake_deposited: false,
                 };
 
                 // Store meta in v2 format using PackedDataKey
