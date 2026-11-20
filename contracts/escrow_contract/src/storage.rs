@@ -94,9 +94,12 @@ impl StorageManager {
 
     /// Check if storage migration is needed.
     /// Returns true if current version is less than STORAGE_VERSION.
-    #[expect(
-        dead_code,
-        reason = "kept as a small migration-status helper for future upgrade flows"
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "kept as a small migration-status helper for future upgrade flows"
+        )
     )]
     pub fn needs_migration(env: &Env) -> bool {
         Self::get_version(env) < STORAGE_VERSION
@@ -384,6 +387,77 @@ mod tests {
 
             // The v1 entry must be left untouched so a retry is possible.
             assert!(env.storage().persistent().has(&DataKey::Escrow(1)));
+        });
+    }
+
+    /// Runs `f` inside a freshly registered escrow contract. No auths are
+    /// mocked: the storage-version helpers take no caller and must not
+    /// require authorization.
+    fn with_contract<T>(f: impl FnOnce(&Env) -> T) -> T {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, crate::EscrowContract);
+        let out = env.as_contract(&contract_id, || f(&env));
+        assert!(env.auths().is_empty());
+        out
+    }
+
+    /// #659: `needs_migration` has no caller argument; it reads the stored
+    /// version and must not panic at the numeric extremes of that version.
+    #[test]
+    fn test_needs_migration_caller_and_bounds() {
+        with_contract(|env| {
+            // Unset version defaults to the legacy v1.
+            assert!(StorageManager::needs_migration(env));
+
+            StorageManager::set_version(env, 0);
+            assert!(StorageManager::needs_migration(env));
+
+            StorageManager::set_version(env, STORAGE_VERSION);
+            assert!(!StorageManager::needs_migration(env));
+
+            StorageManager::set_version(env, u32::MAX);
+            assert!(!StorageManager::needs_migration(env));
+        });
+    }
+
+    /// #660: `migrate` has no caller argument; a stored version of zero
+    /// migrates, and an out-of-range version returns the crate's error.
+    #[test]
+    fn test_migrate_caller_and_bounds() {
+        with_contract(|env| {
+            StorageManager::set_version(env, STORAGE_VERSION);
+            assert_eq!(StorageManager::migrate(env), Ok(()));
+            assert_eq!(StorageManager::get_version(env), STORAGE_VERSION);
+
+            StorageManager::set_version(env, 0);
+            assert_eq!(StorageManager::migrate(env), Ok(()));
+            assert_eq!(StorageManager::get_version(env), STORAGE_VERSION);
+
+            StorageManager::set_version(env, u32::MAX);
+            assert_eq!(
+                StorageManager::migrate(env),
+                Err(crate::EscrowError::E42)
+            );
+            assert_eq!(StorageManager::get_version(env), u32::MAX);
+        });
+    }
+
+    /// #661: `init_version` has no caller argument; it always writes the
+    /// current version, whatever value (zero or `u32::MAX`) was stored.
+    #[test]
+    fn test_init_version_caller_and_bounds() {
+        with_contract(|env| {
+            StorageManager::init_version(env);
+            assert_eq!(StorageManager::get_version(env), STORAGE_VERSION);
+
+            StorageManager::set_version(env, 0);
+            StorageManager::init_version(env);
+            assert_eq!(StorageManager::get_version(env), STORAGE_VERSION);
+
+            StorageManager::set_version(env, u32::MAX);
+            StorageManager::init_version(env);
+            assert_eq!(StorageManager::get_version(env), STORAGE_VERSION);
+            assert!(!StorageManager::needs_migration(env));
         });
     }
 }
