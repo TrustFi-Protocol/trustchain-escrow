@@ -797,7 +797,7 @@ impl ContractStorage {
             return Ok(());
         }
 
-        token::Client::new(env, token).transfer(payer, &env.current_contract_address(), &amount);
+        transfer_verified_deposit(env, token, payer, amount)?;
         Ok(())
     }
 
@@ -1068,6 +1068,65 @@ impl ContractStorage {
             .get(&DataKey::Template(id))
             .ok_or(EscrowError::E8)
     }
+}
+
+/// Require the recipient balance to increase by exactly the amount credited.
+/// Reject tokens that silently under-credit, over-credit, or misreport balances.
+/// E74 reports a malformed external token result; no escrow balance is recorded.
+fn transfer_verified_deposit(
+    env: &Env,
+    token_address: &Address,
+    payer: &Address,
+    amount: i128,
+) -> Result<(), EscrowError> {
+    let token_client = token::Client::new(env, token_address);
+    let recipient = env.current_contract_address();
+    let before = token_client.balance(&recipient);
+    token_client.transfer(payer, &recipient, &amount);
+    let after = token_client.balance(&recipient);
+    if after.checked_sub(before) != Some(amount) {
+        return Err(EscrowError::E74);
+    }
+    Ok(())
+}
+
+/// Exact integer conversion between assets with equally scaled price feeds.
+/// Amounts remain integer stroops; a fractional result is rejected, not rounded.
+fn convert_exact_stroops(amount: i128, from_price: i128, to_price: i128) -> Result<i128, EscrowError> {
+    if from_price <= 0 || to_price <= 0 {
+        return Err(EscrowError::OracleInvalidPrice);
+    }
+    let numerator = amount
+        .checked_mul(from_price)
+        .ok_or(EscrowError::OraclePriceConversionFailed)?;
+    if numerator % to_price != 0 {
+        return Err(EscrowError::OraclePriceConversionFailed);
+    }
+    Ok(numerator / to_price)
+}
+
+/// The escrow timestamp deadline is exclusive for opening a new dispute.
+fn require_dispute_open_window(env: &Env, meta: &EscrowMeta) -> Result<(), EscrowError> {
+    if let Some(deadline) = meta.deadline {
+        if env.ledger().timestamp() >= deadline {
+            return Err(EscrowError::E23);
+        }
+    }
+    Ok(())
+}
+
+/// The dispute timeout is in ledger sequences, not seconds. Resolution and
+/// escalation are allowed strictly before start + timeout. At the cutoff and
+/// later, the existing claim_dispute_timeout path remains the settlement route.
+fn require_dispute_resolution_window(env: &Env, meta: &EscrowMeta) -> Result<(), EscrowError> {
+    if let Some(timeout) = meta.dispute_timeout_ledger {
+        let start = meta.dispute_started_ledger.ok_or(EscrowError::E23)?;
+        let cutoff = start.checked_add(timeout).ok_or(EscrowError::E20)?;
+        if env.ledger().sequence() >= cutoff {
+            return Err(EscrowError::E23);
+        }
+    }
+    Ok(())
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1354,8 +1413,8 @@ impl EscrowContract {
         oracle::get_price_usd(&env, &asset)
     }
 
-    /// Convert `amount` of `from_asset` into equivalent units of `to_asset`
-    /// using live oracle prices.
+    /// Convert integer stroops using live oracle prices. The result must also
+    /// be an exact integer stroop amount; fractional results are rejected.
     /// Contract entry point: `convert_amount`.
     ///
     /// See the function name for the public contract operation.
@@ -1366,7 +1425,16 @@ impl EscrowContract {
         to_asset: Address,
     ) -> Result<i128, EscrowError> {
         ContractStorage::require_initialized(&env)?;
-        oracle::convert_amount(&env, amount, &from_asset, &to_asset)
+        let from_price = oracle::get_price_usd(&env, &from_asset)?;
+        let to_price = oracle::get_price_usd(&env, &to_asset)?;
+        let exact = convert_exact_stroops(amount, from_price, to_price)?;
+        // Keep the existing oracle conversion entry point in use, while
+        // rejecting a result inconsistent with an exact stroop conversion.
+        let converted = oracle::convert_amount(&env, amount, &from_asset, &to_asset)?;
+        if converted != exact {
+            return Err(EscrowError::OraclePriceConversionFailed);
+        }
+        Ok(converted)
     }
 
     /// Adds a milestone with a price-based release condition.
@@ -2324,12 +2392,8 @@ impl EscrowContract {
         let escrow_id = ContractStorage::next_escrow_id(&env)?;
         let rent_reserve = ContractStorage::reserve_for_entries(1);
 
-        // Transfer tokens — single cross-contract call
-        token::Client::new(&env, &token).transfer(
-            &client,
-            &env.current_contract_address(),
-            &total_amount,
-        );
+        // Credit only tokens actually received by the contract.
+        transfer_verified_deposit(&env, &token, &client, total_amount)?;
         ContractStorage::charge_rent_reserve(&env, &token, &client, rent_reserve)?;
 
         ContractStorage::save_escrow_meta(
@@ -2441,11 +2505,8 @@ impl EscrowContract {
         let escrow_id = ContractStorage::next_escrow_id(&env)?;
         let base_rent_reserve = ContractStorage::reserve_for_entries(1);
 
-        token::Client::new(&env, &token).transfer(
-            &client,
-            &env.current_contract_address(),
-            &total_amount,
-        );
+        // Reject fee-on-transfer or malformed token balance results.
+        transfer_verified_deposit(&env, &token, &client, total_amount)?;
         ContractStorage::charge_rent_reserve(&env, &token, &client, base_rent_reserve)?;
 
         let mut buyer_signers = soroban_sdk::Vec::new(&env);
@@ -4550,6 +4611,7 @@ impl EscrowContract {
         if meta.status != EscrowStatus::Active {
             return Err(EscrowError::E9);
         }
+        require_dispute_open_window(&env, &meta)?;
 
         meta.status = EscrowStatus::Disputed;
         state_history::record_state_change(
@@ -4718,6 +4780,10 @@ impl EscrowContract {
             let mut meta = ContractStorage::load_escrow_meta_with_rent(&env, escrow_id)?;
 
             let is_arbiter = meta.arbiter.as_ref().is_some_and(|a| *a == caller);
+            // Defense in depth for escrows created before arbiter neutrality checks.
+            if is_arbiter && (caller == meta.client || caller == meta.freelancer) {
+                return Err(EscrowError::E3);
+            }
             if !is_arbiter {
                 ContractStorage::require_admin(&env, &caller)?;
             }
@@ -4733,6 +4799,7 @@ impl EscrowContract {
             if meta.status != EscrowStatus::Disputed {
                 return Err(EscrowError::E10);
             }
+            require_dispute_resolution_window(&env, &meta)?;
             if client_amount + freelancer_amount != meta.remaining_balance {
                 return Err(EscrowError::E20);
             }
@@ -4857,6 +4924,7 @@ impl EscrowContract {
         if meta.status != EscrowStatus::Disputed {
             return Err(EscrowError::E10);
         }
+        require_dispute_resolution_window(&env, &meta)?;
 
         // Must meet high-value threshold
         if meta.total_amount < HIGH_VALUE_THRESHOLD {
@@ -4951,6 +5019,7 @@ impl EscrowContract {
             if meta.status != EscrowStatus::Disputed {
                 return Err(EscrowError::E10);
             }
+            require_dispute_resolution_window(&env, &meta)?;
 
             // 1. Grace period check
             let dispute_start = meta.dispute_start_ledger.ok_or(EscrowError::E60)?;
@@ -9363,3 +9432,221 @@ mod payment_token_status_upgrade_compat_tests {
     }
 }
 // END ISSUE-419 PAYMENT TOKEN STATUS UPGRADE TESTS
+
+// Focused regression tests for #864, #865, #866 and #869.
+#[cfg(test)]
+mod escrow_security_regression_tests {
+    extern crate std;
+
+    use super::*;
+    use soroban_sdk::testutils::{Address as _, Ledger as _};
+    use soroban_sdk::{contract, contractimpl};
+
+    fn no_multisig(env: &Env) -> MultisigConfig {
+        MultisigConfig {
+            approvers: Vec::new(env),
+            weights: Vec::new(env),
+            threshold: 0,
+        }
+    }
+
+    fn setup() -> (Env, Address, Address, Address, EscrowContractClient<'static>) {
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let client = Address::generate(&env);
+        let freelancer = Address::generate(&env);
+        let contract_id = env.register_contract(None, EscrowContract);
+        let escrow = EscrowContractClient::new(&env, &contract_id);
+        escrow.initialize(&admin);
+        (env, admin, client, freelancer, escrow)
+    }
+
+    fn mint_token(env: &Env, admin: &Address, client: &Address, amount: i128) -> Address {
+        let token_id = env.register_stellar_asset_contract_v2(admin.clone()).address();
+        token::StellarAssetClient::new(env, &token_id).mint(client, &amount);
+        token_id
+    }
+
+    #[contract]
+    pub struct ShortCreditToken;
+
+    #[contractimpl]
+    impl ShortCreditToken {
+        pub fn balance(env: Env, owner: Address) -> i128 {
+            env.storage().instance().get(&owner).unwrap_or(0)
+        }
+
+        pub fn mint(env: Env, owner: Address, amount: i128) {
+            env.storage().instance().set(&owner, &amount);
+        }
+
+        pub fn transfer(env: Env, from: Address, to: Address, amount: i128) {
+            from.require_auth();
+            let from_balance: i128 = env.storage().instance().get(&from).unwrap_or(0);
+            let to_balance: i128 = env.storage().instance().get(&to).unwrap_or(0);
+            assert!(amount > 0 && from_balance >= amount);
+            env.storage().instance().set(&from, &(from_balance - amount));
+            // Simulates a successful transfer that credits one stroop too little.
+            env.storage().instance().set(&to, &(to_balance + amount - 1));
+        }
+    }
+
+    #[test]
+    fn exact_deposit_succeeds_and_short_credit_fails() {
+        let (env, admin, buyer, freelancer, escrow) = setup();
+        let token_id = mint_token(&env, &admin, &buyer, 200);
+        let escrow_id = escrow.create_escrow(
+            &buyer, &freelancer, &token_id, &100,
+            &BytesN::from_array(&env, &[11; 32]), &None, &None, &None,
+            &None, &no_multisig(&env), &None,
+        );
+        assert_eq!(escrow.get_escrow(&escrow_id).remaining_balance, 100);
+        let token_client = token::Client::new(&env, &token_id);
+        assert_eq!(token_client.balance(&freelancer), 0);
+
+        let bad_id = env.register_contract(None, ShortCreditToken);
+        let bad = ShortCreditTokenClient::new(&env, &bad_id);
+        bad.mint(&buyer, &1_000);
+        let rejected = escrow.try_create_escrow(
+            &buyer, &freelancer, &bad_id, &100,
+            &BytesN::from_array(&env, &[12; 32]), &None, &None, &None,
+            &None, &no_multisig(&env), &None,
+        );
+        assert!(matches!(rejected, Err(Ok(EscrowError::E74))));
+    }
+
+    #[test]
+    fn precision_uses_integer_stroops_and_rejects_fractional_conversion() {
+        assert_eq!(convert_exact_stroops(1, 1, 1), Ok(1));
+        assert_eq!(convert_exact_stroops(MAX_ESCROW_AMOUNT, 1, 1), Ok(MAX_ESCROW_AMOUNT));
+        assert_eq!(
+            convert_exact_stroops(1, 1, 2),
+            Err(EscrowError::OraclePriceConversionFailed),
+        );
+        assert_eq!(convert_exact_stroops(3, 2, 3), Ok(2));
+
+        let env = Env::default();
+        assert_eq!(EscrowContract::validate_escrow_inputs(&env, MIN_ESCROW_AMOUNT, None, None), Ok(()));
+        assert_eq!(EscrowContract::validate_escrow_inputs(&env, MAX_ESCROW_AMOUNT, None, None), Ok(()));
+        assert_eq!(EscrowContract::validate_escrow_inputs(&env, MAX_ESCROW_AMOUNT + 1, None, None), Err(EscrowError::E85));
+        assert_eq!(EscrowContract::validate_escrow_inputs(&env, 0, None, None), Err(EscrowError::E84));
+
+        // Display round trips at the Stellar 7-decimal asset precision.
+        const STROOPS_PER_XLM: i128 = 10_000_000;
+        for stroops in [1_i128, STROOPS_PER_XLM + 1, MAX_ESCROW_AMOUNT] {
+            let display = std::format!("{}.{:07}", stroops / STROOPS_PER_XLM, stroops % STROOPS_PER_XLM);
+            let (whole, fractional) = display.split_once('.').unwrap();
+            assert_eq!(fractional.len(), 7);
+            let recovered: i128 = whole.parse::<i128>().unwrap() * STROOPS_PER_XLM
+                + fractional.parse::<i128>().unwrap();
+            assert_eq!(recovered, stroops);
+        }
+    }
+
+    #[test]
+    fn client_or_freelancer_cannot_be_an_arbiter_but_none_remains_supported() {
+        let (env, admin, buyer, freelancer, escrow) = setup();
+        let token_id = mint_token(&env, &admin, &buyer, 500);
+        let rejected = escrow.try_create_escrow(
+            &buyer, &freelancer, &token_id, &100,
+            &BytesN::from_array(&env, &[21; 32]), &Some(buyer.clone()),
+            &None, &None, &None, &no_multisig(&env), &None,
+        );
+        assert!(matches!(rejected, Err(Ok(EscrowError::E3))));
+        let rejected = escrow.try_create_escrow(
+            &buyer, &freelancer, &token_id, &100,
+            &BytesN::from_array(&env, &[22; 32]), &Some(freelancer.clone()),
+            &None, &None, &None, &no_multisig(&env), &None,
+        );
+        assert!(matches!(rejected, Err(Ok(EscrowError::E3))));
+        let escrow_id = escrow.create_escrow(
+            &buyer, &freelancer, &token_id, &100,
+            &BytesN::from_array(&env, &[23; 32]), &None,
+            &None, &None, &None, &no_multisig(&env), &None,
+        );
+        assert!(matches!(escrow.try_update_arbiter(&escrow_id, &Some(buyer.clone())), Err(Ok(EscrowError::E3))));
+        assert!(matches!(escrow.try_update_arbiter(&escrow_id, &Some(freelancer.clone())), Err(Ok(EscrowError::E3))));
+        escrow.update_arbiter(&escrow_id, &None);
+        assert_eq!(escrow.get_escrow(&escrow_id).arbiter, None);
+    }
+
+    #[test]
+    fn a_legacy_party_arbiter_cannot_resolve_a_dispute() {
+        let (env, admin, buyer, freelancer, escrow) = setup();
+        let token_id = mint_token(&env, &admin, &buyer, 200);
+        let escrow_id = escrow.create_escrow(
+            &buyer, &freelancer, &token_id, &100,
+            &BytesN::from_array(&env, &[24; 32]), &None,
+            &None, &None, &None, &no_multisig(&env), &None,
+        );
+        escrow.raise_dispute(&buyer, &escrow_id, &None);
+        // Emulate legacy inconsistent storage; creation/replacement now prevent it.
+        let contract_id = escrow.address.clone();
+        env.as_contract(&contract_id, || {
+            let key = PackedDataKey::EscrowMeta(escrow_id);
+            let mut meta: EscrowMeta = env.storage().persistent().get(&key).unwrap();
+            meta.arbiter = Some(buyer.clone());
+            env.storage().persistent().set(&key, &meta);
+        });
+        let result = escrow.try_resolve_dispute(&buyer, &escrow_id, &100, &0);
+        assert!(matches!(result, Err(Ok(EscrowError::E3))));
+    }
+
+    #[test]
+    fn neutral_arbiter_resolves_before_the_configured_timeout() {
+        let (env, admin, buyer, freelancer, escrow) = setup();
+        env.ledger().with_mut(|l| {
+            l.timestamp = 10;
+            l.sequence_number = 10;
+        });
+        let token_id = mint_token(&env, &admin, &buyer, 200);
+        let neutral = Address::generate(&env);
+        let escrow_id = escrow.create_escrow_dispute_timeout(
+            &buyer, &freelancer, &token_id, &100,
+            &BytesN::from_array(&env, &[25; 32]), &Some(neutral.clone()),
+            &None, &None, &200,
+        );
+        escrow.raise_dispute(&buyer, &escrow_id, &None);
+        let start = env.ledger().sequence();
+        env.ledger().with_mut(|l| l.sequence_number = start + 100);
+        escrow.resolve_dispute(&neutral, &escrow_id, &40, &60);
+        assert_eq!(escrow.get_escrow(&escrow_id).remaining_balance, 0);
+        assert_eq!(token::Client::new(&env, &token_id).balance(&freelancer), 60);
+    }
+
+    #[test]
+    fn dispute_deadline_blocks_late_opening_and_resolution_without_transfers() {
+        let (env, admin, buyer, freelancer, escrow) = setup();
+        let token_id = mint_token(&env, &admin, &buyer, 500);
+        let deadline = env.ledger().timestamp() + 10;
+        let escrow_id = escrow.create_escrow(
+            &buyer, &freelancer, &token_id, &100,
+            &BytesN::from_array(&env, &[31; 32]), &None,
+            &Some(deadline), &None, &None, &no_multisig(&env), &None,
+        );
+        env.ledger().with_mut(|l| l.timestamp = deadline);
+        let result = escrow.try_raise_dispute(&buyer, &escrow_id, &None);
+        assert!(matches!(result, Err(Ok(EscrowError::E23))));
+        assert_eq!(escrow.get_escrow(&escrow_id).status, EscrowStatus::Active);
+
+        let arbiter = Address::generate(&env);
+        let timed_id = escrow.create_escrow_dispute_timeout(
+            &buyer, &freelancer, &token_id, &100,
+            &BytesN::from_array(&env, &[32; 32]), &Some(arbiter.clone()),
+            &None, &None, &150,
+        );
+        escrow.raise_dispute(&buyer, &timed_id, &None);
+        let opened = env.ledger().sequence();
+        env.ledger().with_mut(|l| l.sequence_number = opened + 150);
+        let token_client = token::Client::new(&env, &token_id);
+        let before = token_client.balance(&freelancer);
+        let result = escrow.try_resolve_dispute(&arbiter, &timed_id, &0, &100);
+        assert!(matches!(result, Err(Ok(EscrowError::E23))));
+        assert_eq!(token_client.balance(&freelancer), before);
+        assert_eq!(escrow.get_escrow(&timed_id).remaining_balance, 100);
+        // The timeout claim is intentionally available at the cutoff.
+        escrow.claim_dispute_timeout(&buyer, &timed_id);
+        assert_eq!(escrow.get_escrow(&timed_id).remaining_balance, 0);
+    }
+}
