@@ -102,6 +102,8 @@ mod reentrancy_guard_tests;
 mod self_escrow_tests;
 mod slippage_tests;
 mod split_escrow_tests;
+// Freelancer performance staking (#672, #673, #674).
+mod staking;
 mod state_history;
 mod state_history_tests;
 mod storage;
