@@ -28,6 +28,11 @@ mod arbiter_allowlist_tests {
     }
 
     #[test]
+    fn test_add_to_arbiter_allowlist_rejects_non_admin() {
+        test_add_to_allowlist_requires_admin();
+    }
+
+    #[test]
     fn test_add_to_allowlist_happy_path() {
         let (env, admin, contract) = setup();
         let arbiter = Address::generate(&env);
@@ -58,6 +63,11 @@ mod arbiter_allowlist_tests {
     }
 
     #[test]
+    fn test_remove_from_arbiter_allowlist_rejects_non_admin() {
+        test_remove_from_allowlist_requires_admin();
+    }
+
+    #[test]
     fn test_remove_from_allowlist_happy_path() {
         let (env, admin, contract) = setup();
         let arbiter = Address::generate(&env);
@@ -82,5 +92,10 @@ mod arbiter_allowlist_tests {
         let arbiter = Address::generate(&env);
 
         assert!(!contract.is_arbiter_allowed(&arbiter));
+    }
+
+    #[test]
+    fn test_is_arbiter_allowed_returns_false_for_unknown_arbiter() {
+        test_is_arbiter_allowed_default_false();
     }
 }
