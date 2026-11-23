@@ -191,6 +191,30 @@ mod dispute_evidence_tests {
     }
 
     #[test]
+    fn test_add_evidence_caller_and_escrow_id_bounds() {
+        let (env, admin, client, freelancer, contract) = setup();
+        let escrow_id = create_disputed_escrow(&env, &admin, &client, &freelancer, &contract);
+
+        let evidence_hash = BytesN::from_array(&env, &[2u8; 32]);
+        let description = String::from_str(&env, "test evidence");
+
+        // Different address than the required parties is rejected with E83.
+        let outsider = Address::generate(&env);
+        let result = contract.try_add_evidence(&outsider, &escrow_id, &evidence_hash, &description);
+        assert_eq!(result, Err(Ok(crate::EscrowError::E83)));
+
+        // Required caller succeeds.
+        let count = contract.add_evidence(&client, &escrow_id, &evidence_hash, &description);
+        assert_eq!(count, 1);
+
+        // Numeric argument at zero and at u64::MAX returns an error, not a panic.
+        for bad_id in [0u64, u64::MAX] {
+            let result = contract.try_add_evidence(&client, &bad_id, &evidence_hash, &description);
+            assert_eq!(result, Err(Ok(crate::EscrowError::E8)));
+        }
+    }
+
+    #[test]
     fn test_add_evidence_freelancer() {
         let (env, admin, client, freelancer, contract) = setup();
         let escrow_id = create_disputed_escrow(&env, &admin, &client, &freelancer, &contract);
