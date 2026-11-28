@@ -191,6 +191,14 @@ mod roundtrip_tests {
 
 Apply the same pattern to every other `#[contracttype]` struct in the contract (e.g., `Milestone`, `EscrowStatus`, `MilestoneStatus`).
 
+### Covered Structs
+
+The following `#[contracttype]` structs currently have round-trip tests in `contracts/escrow_contract/src/types.rs`:
+
+- `EscrowMeta`
+- `Milestone`
+- `TermsAcceptance` — deterministic `from_val(to_val(x)) == x` test covering zero/empty and non-zero values for every field: `escrow_id`, `client`, `terms_hash`, `accepted`, and `accepted_at`. The test compares all fields, so it fails if any of them changes during the ScVal round trip.
+
 ---
 
 ## Regression Test Requirement

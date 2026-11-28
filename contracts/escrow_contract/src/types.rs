@@ -804,6 +804,79 @@ pub struct TermsAcceptance {
     pub accepted_at: Option<u64>,
 }
 
+#[cfg(test)]
+mod terms_acceptance_roundtrip_tests {
+    use super::TermsAcceptance;
+    use soroban_sdk::testutils::Address as _;
+    use soroban_sdk::{Address, BytesN, Env, IntoVal, TryFromVal};
+
+    /// Builds a `TermsAcceptance` with all-zero / empty field values.
+    fn zero_value(env: &Env) -> TermsAcceptance {
+        TermsAcceptance {
+            escrow_id: 0,
+            client: Address::from_str(
+                env,
+                "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
+            ),
+            terms_hash: BytesN::from_array(env, &[0u8; 32]),
+            accepted: false,
+            accepted_at: Some(0),
+        }
+    }
+
+    /// Builds a `TermsAcceptance` with non-zero / maximal field values.
+    fn non_zero_value(env: &Env) -> TermsAcceptance {
+        TermsAcceptance {
+            escrow_id: u64::MAX,
+            client: Address::from_str(
+                env,
+                "GBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+            ),
+            terms_hash: BytesN::from_array(env, &[0xFFu8; 32]),
+            accepted: true,
+            accepted_at: Some(u64::MAX),
+        }
+    }
+
+    /// Asserts every field survives a ScVal round trip unchanged.
+    fn assert_roundtrip(env: &Env, original: &TermsAcceptance) {
+        let serialised = original.clone().into_val(env);
+        let roundtripped = TermsAcceptance::try_from_val(env, &serialised)
+            .expect("TermsAcceptance must decode from its own ScVal encoding");
+
+        assert_eq!(roundtripped.escrow_id, original.escrow_id);
+        assert_eq!(roundtripped.client, original.client);
+        assert_eq!(roundtripped.terms_hash, original.terms_hash);
+        assert_eq!(roundtripped.accepted, original.accepted);
+        assert_eq!(roundtripped.accepted_at, original.accepted_at);
+
+        // Struct derives Eq/PartialEq, so a full comparison must also hold.
+        assert_eq!(&roundtripped, original);
+    }
+
+    #[test]
+    fn terms_acceptance_zero_value_roundtrip() {
+        let env = Env::default();
+        let original = zero_value(&env);
+        assert_roundtrip(&env, &original);
+    }
+
+    #[test]
+    fn terms_acceptance_non_zero_value_roundtrip() {
+        let env = Env::default();
+        let original = non_zero_value(&env);
+        assert_roundtrip(&env, &original);
+    }
+
+    #[test]
+    fn terms_acceptance_accepted_at_none_roundtrip() {
+        let env = Env::default();
+        let mut original = non_zero_value(&env);
+        original.accepted_at = None;
+        assert_roundtrip(&env, &original);
+    }
+}
+
 /// Configuration for a Stellar DEX integration for cross-contract asset swaps.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
