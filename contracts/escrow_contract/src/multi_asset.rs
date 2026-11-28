@@ -190,4 +190,15 @@ mod tests {
         assert_eq!(alloc.released, 0);
         assert_eq!(alloc.token, addr);
     }
+
+    #[test]
+    fn test_deposit_asset_rejects_zero_amount_before_state_change() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let caller = Address::generate(&env);
+        let token = Address::generate(&env);
+
+        let result = deposit_asset(&env, &caller, 0, &token, 0);
+        assert!(result.is_err());
+    }
 }
