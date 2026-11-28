@@ -912,7 +912,7 @@ pub struct DexSwapRecord {
 }
 #[cfg(test)]
 mod scval_roundtrip_tests {
-    use super::{BytesN, FeeDelegation, FeeTier, MilestoneTemplate, String};
+    use super::{BytesN, OracleResolutionPayload, PriceCondition, PriceDirection};
     use soroban_sdk::{Address, Env, TryFromVal, Val};
     use soroban_sdk::testutils::Address as _;
     fn assert_scval_roundtrip<T>(env: &Env, original: &T)
@@ -933,34 +933,36 @@ mod scval_roundtrip_tests {
 
 
     #[test]
-    fn fee_delegation_scval_roundtrip() {
+    fn oracle_resolution_payload_scval_roundtrip() {
         let env = Env::default();
-        let payer = Address::generate(&env);
-        let token = Address::generate(&env);
-        assert_scval_roundtrip(&env, &FeeDelegation { fee_payer: payer.clone(), max_fee: 0, fee_token: token.clone() });
-        assert_scval_roundtrip(&env, &FeeDelegation { fee_payer: payer, max_fee: 100, fee_token: token });
+        let sig = BytesN::from_array(&env, &[0u8; 64]);
+        let pk = BytesN::from_array(&env, &[0u8; 32]);
+        assert_scval_roundtrip(&env, &OracleResolutionPayload {
+            escrow_id: 0,
+            client_bps: 0,
+            freelancer_bps: 0,
+            expires_at: 0,
+            signature: sig.clone(),
+            oracle_pubkey: pk.clone(),
+        });
+        let sig2 = BytesN::from_array(&env, &[7u8; 64]);
+        let pk2 = BytesN::from_array(&env, &[3u8; 32]);
+        assert_scval_roundtrip(&env, &OracleResolutionPayload {
+            escrow_id: 11,
+            client_bps: 3000,
+            freelancer_bps: 7000,
+            expires_at: 555,
+            signature: sig2,
+            oracle_pubkey: pk2,
+        });
     }
 
     #[test]
-    fn fee_tier_scval_roundtrip() {
+    fn price_condition_scval_roundtrip() {
         let env = Env::default();
-        assert_scval_roundtrip(&env, &FeeTier { min_total_amount: 0, fee_bps: 0 });
-        assert_scval_roundtrip(&env, &FeeTier { min_total_amount: 1_000_000, fee_bps: 25 });
-    }
-
-    #[test]
-    fn milestone_template_scval_roundtrip() {
-        let env = Env::default();
-        assert_scval_roundtrip(&env, &MilestoneTemplate {
-            title: String::from_str(&env, ""),
-            description_hash: BytesN::from_array(&env, &[0u8; 32]),
-            amount: 0,
-        });
-        assert_scval_roundtrip(&env, &MilestoneTemplate {
-            title: String::from_str(&env, "deliverable"),
-            description_hash: BytesN::from_array(&env, &[9u8; 32]),
-            amount: 250,
-        });
+        let asset = Address::generate(&env);
+        assert_scval_roundtrip(&env, &PriceCondition { asset: asset.clone(), target_price_usd: 0, direction: PriceDirection::Above });
+        assert_scval_roundtrip(&env, &PriceCondition { asset, target_price_usd: 1_250_000, direction: PriceDirection::Below });
     }
 
 
