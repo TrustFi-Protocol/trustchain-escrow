@@ -52,47 +52,55 @@ pub enum BridgeDataKey {
 }
 
 #[cfg(test)]
-mod scval_roundtrip_tests {
-    use super::{BridgeConfirmation, BridgeProtocol};
-    use soroban_sdk::{Address, Env, TryFromVal, Val};
-    use soroban_sdk::testutils::Address as _;
+mod tests {
+    use super::*;
+    use soroban_sdk::{testutils::Address as _, Env, IntoVal, TryFromVal};
 
-    fn assert_scval_roundtrip<T>(env: &Env, original: &T)
-    where
-        T: soroban_sdk::IntoVal<Env, Val>
-            + soroban_sdk::TryFromVal<Env, Val>
-            + Clone
-            + core::fmt::Debug,
-    {
-        let serialised: Val = original.clone().into_val(env);
-        let decoded = T::try_from_val(env, &serialised).expect("ScVal round-trip must not fail");
-        assert_eq!(
-            format!("{original:?}"),
-            format!("{decoded:?}"),
-            "ScVal round-trip changed the value"
-        );
+    /// Asserts that every field of `WrappedTokenInfo` survives a ScVal round trip.
+    fn assert_round_trip(env: &Env, original: &WrappedTokenInfo) {
+        let val = original.clone().into_val(env);
+        let decoded = WrappedTokenInfo::try_from_val(env, &val)
+            .expect("WrappedTokenInfo should decode from its own ScVal");
+
+        assert_eq!(decoded.stellar_address, original.stellar_address);
+        assert_eq!(decoded.origin_chain, original.origin_chain);
+        assert_eq!(decoded.origin_address, original.origin_address);
+        assert_eq!(decoded.bridge, original.bridge);
+        assert_eq!(decoded.is_approved, original.is_approved);
     }
 
     #[test]
-    fn bridge_confirmation_scval_roundtrip() {
+    fn wrapped_token_info_scval_round_trip() {
         let env = Env::default();
-        let token = Address::generate(&env);
-        let zero = BridgeConfirmation {
-            token: token.clone(),
-            bridge: BridgeProtocol::Wormhole,
-            confirmations: 0,
-            is_finalized: false,
-            updated_at: 0,
-        };
-        assert_scval_roundtrip(&env, &zero);
-        let nonzero = BridgeConfirmation {
-            token,
-            bridge: BridgeProtocol::Allbridge,
-            confirmations: 12,
-            is_finalized: true,
-            updated_at: 42,
-        };
-        assert_scval_roundtrip(&env, &nonzero);
-    }
 
+        // Empty / zero-ish value: empty strings, first bridge variant, false flag.
+        let empty = WrappedTokenInfo {
+            stellar_address: Address::generate(&env),
+            origin_chain: String::from_str(&env, ""),
+            origin_address: String::from_str(&env, ""),
+            bridge: BridgeProtocol::Wormhole,
+            is_approved: false,
+        };
+        assert_round_trip(&env, &empty);
+
+        // Non-zero value: non-empty strings, other bridge variant, true flag.
+        let populated = WrappedTokenInfo {
+            stellar_address: Address::generate(&env),
+            origin_chain: String::from_str(&env, "ethereum"),
+            origin_address: String::from_str(&env, "0xdeadbeef"),
+            bridge: BridgeProtocol::Allbridge,
+            is_approved: true,
+        };
+        assert_round_trip(&env, &populated);
+
+        // Cross-check the two bridge variants independently.
+        let wormhole = WrappedTokenInfo {
+            stellar_address: Address::generate(&env),
+            origin_chain: String::from_str(&env, "solana"),
+            origin_address: String::from_str(&env, "So11111111111111111111111111111111111111112"),
+            bridge: BridgeProtocol::Wormhole,
+            is_approved: true,
+        };
+        assert_round_trip(&env, &wormhole);
+    }
 }

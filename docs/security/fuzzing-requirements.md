@@ -191,13 +191,14 @@ mod roundtrip_tests {
 
 Apply the same pattern to every other `#[contracttype]` struct in the contract (e.g., `Milestone`, `EscrowStatus`, `MilestoneStatus`).
 
-### Covered Structs
+### Current Round-Trip Test Coverage
 
-The following `#[contracttype]` structs currently have round-trip tests in `contracts/escrow_contract/src/types.rs`:
+The following `#[contracttype]` structs already have round-trip tests:
 
-- `EscrowMeta`
-- `Milestone`
-- `TermsAcceptance` — deterministic `from_val(to_val(x)) == x` test covering zero/empty and non-zero values for every field: `escrow_id`, `client`, `terms_hash`, `accepted`, and `accepted_at`. The test compares all fields, so it fails if any of them changes during the ScVal round trip.
+- `EscrowMeta` — proptest-based round-trip test.
+- `Milestone` — proptest-based round-trip test.
+- `WrappedTokenInfo` (`contracts/escrow_contract/src/bridge/types.rs`) — deterministic ScVal round-trip test (`from_val(to_val(x)) == x`). It builds valid values and compares every field (`stellar_address`, `origin_chain`, `origin_address`, `bridge`, `is_approved`), covering both zero/empty and non-zero values for each numeric or collection field. The test lives inside the contract package, so `cargo test -p escrow_contract` runs it, and it requires no live network or funded account.
+=======
 
 ---
 
@@ -266,8 +267,7 @@ Before opening a pull request that adds or modifies a contract function, confirm
 - [ ] Each fuzz target runs a minimum of 10,000 iterations.
 - [ ] State-mutating fuzz targets exercise boundary values: `0`, `i128::MAX`, `u32::MAX`.
 - [ ] Administrative fuzz targets assert `EscrowError::Unauthorized` or `EscrowError::AdminOnly` for arbitrary non-authorised callers.
-- [x] Round-trip unit tests: `RecurringPaymentConfig`, `RecurringScheduleStatus`, `SlashRecord`, `StateHistoryEntry`.
-- [ ] All `#[contracttype]` structs have a round-trip serialisation fuzz test (`from_val(env, &to_val(env, &x)) == x`).
+- [ ] All `#[contracttype]` structs have a round-trip serialisation fuzz test (`from_val(env, &to_val(env, &x)) == x`). This includes `EscrowMeta`, `Milestone`, and `WrappedTokenInfo` (deterministic ScVal round-trip test covering zero/empty and non-zero values for every field).
 - [ ] If `cargo fuzz` discovered a panic during development, a regression `#[test]` reproducing the exact input has been added and passes after the fix.
 - [ ] All fuzz tests pass with `cargo test` before the pull request is submitted.
 
