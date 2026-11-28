@@ -109,6 +109,7 @@ mod self_escrow_tests;
 mod set_max_milestones_boundary_tests;
 mod slippage_tests;
 mod split_escrow_tests;
+mod staking;
 mod state_history;
 mod state_history_tests;
 mod storage;
@@ -319,6 +320,10 @@ pub struct EscrowMeta {
     /// Arbiter fee in basis points — portion of the escrow amount reserved
     /// for the arbiter upon dispute resolution (0 = no arbiter fee).
     pub arbiter_fee_bps: u32,
+    /// Freelancer performance stake required for this escrow (0 = none).
+    pub required_freelancer_stake: i128,
+    /// Whether the freelancer has deposited `required_freelancer_stake`.
+    pub stake_deposited: bool,
 }
 
 // ── Storage helpers ───────────────────────────────────────────────────────────
@@ -2372,6 +2377,8 @@ impl EscrowContract {
                 slippage_reference_price: 0,
                 terms_hash: terms_hash.into(),
                 arbiter_fee_bps: 0,
+                required_freelancer_stake: 0,
+                stake_deposited: false,
             },
         );
 
@@ -2490,6 +2497,8 @@ impl EscrowContract {
             slippage_reference_price: 0,
             terms_hash: None.into(),
             arbiter_fee_bps: 0,
+            required_freelancer_stake: 0,
+            stake_deposited: false,
         };
         ContractStorage::charge_entry_rent(&env, &mut meta, &client, 1)?;
         ContractStorage::save_escrow_meta(&env, &meta);

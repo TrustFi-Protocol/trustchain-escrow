@@ -768,6 +768,8 @@ pub enum DataKey {
     DexConfig,
     /// DEX swap record by escrow ID — key: u64, value: DexSwapRecord
     DexSwapRecord(u64),
+    /// Whether the freelancer stake was deposited — key: escrow_id, value: bool
+    FreelancerStake(u64),
 }
 
 /// Tracks the contract *code* version (distinct from `storage::STORAGE_VERSION`,
