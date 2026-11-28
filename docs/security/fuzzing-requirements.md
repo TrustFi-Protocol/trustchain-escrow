@@ -191,14 +191,15 @@ mod roundtrip_tests {
 
 Apply the same pattern to every other `#[contracttype]` struct in the contract (e.g., `Milestone`, `EscrowStatus`, `MilestoneStatus`).
 
-### Current Round-Trip Test Coverage
+### Currently Covered Structs
 
-The following `#[contracttype]` structs already have round-trip tests:
+The following `#[contracttype]` structs already have deterministic ScVal round-trip tests:
 
-- `EscrowMeta` — proptest-based round-trip test.
-- `Milestone` — proptest-based round-trip test.
-- `WrappedTokenInfo` (`contracts/escrow_contract/src/bridge/types.rs`) — deterministic ScVal round-trip test (`from_val(to_val(x)) == x`). It builds valid values and compares every field (`stellar_address`, `origin_chain`, `origin_address`, `bridge`, `is_approved`), covering both zero/empty and non-zero values for each numeric or collection field. The test lives inside the contract package, so `cargo test -p escrow_contract` runs it, and it requires no live network or funded account.
-=======
+- `EscrowMeta` and `Milestone` — `contracts/escrow_contract/src/types.rs`
+- `Timelock` (fields `duration_ledger`, `start_ledger`) — `contracts/escrow_contract/src/types.rs`
+- `UsdMilestone` (fields `id`, `amount_micro_usd`, `completed`) — `contracts/escrow_contract/src/oracle.rs`
+
+Contributors adding new `#[contracttype]` structs must add an equivalent round-trip test alongside the struct definition.
 
 ---
 
