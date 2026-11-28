@@ -82,6 +82,7 @@ mod event_tests;
 mod events;
 mod extension;
 mod governance_escalation_tests;
+mod list_cancellations_boundary_tests;
 mod lock_time_enforcement_tests;
 mod max_escrow_amount_tests;
 mod meta_snapshot_tests;
