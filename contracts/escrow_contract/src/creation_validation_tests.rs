@@ -364,6 +364,57 @@ mod creation_validation_tests {
         assert!(result.is_ok(), "expected Ok, got {result:?}");
     }
 
+    // ── Validation helper (no transfer, no storage) ───────────────────────────
+
+    /// The pure validation helper must reject bad input on its own, without any
+    /// token transfer or storage mutation.
+    #[test]
+    fn test_validation_helper_rejects_zero_amount() {
+        let (env, admin, client_addr, freelancer, _contract) = setup();
+        let token = register_token(&env, &admin, &client_addr, ESCROW_AMOUNT + 1_000_000);
+
+        let result = crate::validate_create_escrow_with_buyer_signers(
+            &env,
+            &client_addr,
+            &freelancer,
+            &token,
+            &0,
+            &hash32(&env),
+            &None,
+            &None,
+            &None,
+            &None,
+            &no_multisig(&env),
+            &None,
+            &soroban_sdk::Vec::new(&env),
+        );
+        assert_eq!(result, Err(EscrowError::InvalidAmount));
+    }
+
+    /// The same helper rejects an all-zero brief hash.
+    #[test]
+    fn test_validation_helper_rejects_zero_brief_hash() {
+        let (env, admin, client_addr, freelancer, _contract) = setup();
+        let token = register_token(&env, &admin, &client_addr, ESCROW_AMOUNT + 1_000_000);
+
+        let result = crate::validate_create_escrow_with_buyer_signers(
+            &env,
+            &client_addr,
+            &freelancer,
+            &token,
+            &ESCROW_AMOUNT,
+            &BytesN::from_array(&env, &[0u8; 32]),
+            &None,
+            &None,
+            &None,
+            &None,
+            &no_multisig(&env),
+            &None,
+            &soroban_sdk::Vec::new(&env),
+        );
+        assert_eq!(result, Err(EscrowError::InvalidBriefHash));
+    }
+
     // ── Split inheritance ─────────────────────────────────────────────────────
 
     /// A split must not produce children that release immediately.
