@@ -320,6 +320,53 @@ mod tests {
     }
 
     #[test]
+    fn escrow_state_v1_scval_roundtrip() {
+        use soroban_sdk::{IntoVal, TryFromVal, Val};
+        let env = Env::default();
+        let client = Address::generate(&env);
+        let freelancer = Address::generate(&env);
+        let token = Address::generate(&env);
+        let milestones = Vec::<crate::Milestone>::new(&env);
+        let minimal = EscrowStateV1 {
+            escrow_id: 0,
+            client: client.clone(),
+            freelancer: freelancer.clone(),
+            token: token.clone(),
+            total_amount: 0,
+            remaining_balance: 0,
+            status: EscrowStatus::Active,
+            milestones: milestones.clone(),
+            arbiter: None,
+            created_at: 0,
+            deadline: None,
+            lock_time: None,
+            lock_time_extension: None,
+            brief_hash: BytesN::from_array(&env, &[0u8; 32]),
+        };
+        let val: Val = minimal.clone().into_val(&env);
+        let decoded = EscrowStateV1::try_from_val(&env, &val).expect("round trip");
+        assert_eq!(format!("{minimal:?}"), format!("{decoded:?}"));
+        let full = EscrowStateV1 {
+            escrow_id: 2,
+            client,
+            freelancer,
+            token,
+            total_amount: 900,
+            remaining_balance: 100,
+            status: EscrowStatus::Completed,
+            milestones,
+            arbiter: None,
+            created_at: 5,
+            deadline: Some(6),
+            lock_time: Some(7),
+            lock_time_extension: Some(8),
+            brief_hash: BytesN::from_array(&env, &[2u8; 32]),
+        };
+        let val2: Val = full.clone().into_val(&env);
+        let decoded2 = EscrowStateV1::try_from_val(&env, &val2).expect("round trip");
+        assert_eq!(format!("{full:?}"), format!("{decoded2:?}"));
+    }
+
     fn test_escrow_state_v1_has_required_fields() {
         // Verify EscrowStateV1 struct has all required fields
         // This is a compile-time check only
