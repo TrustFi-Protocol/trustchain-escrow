@@ -786,3 +786,15 @@ model TransactionMonitor {
   @@index([status, lastCheckedAt(sort: Asc)])
   @@map("transaction_monitor")
 }
+
+/// Dead-letter queue records for permanently failed stellar event jobs.
+model PermanentFailure {
+  id           Int      @id @default(autoincrement())
+  jobIdHash    String   @map("job_id_hash")
+  errorMessage String   @map("error_message") @db.Text
+  attemptsMade Int      @map("attempts_made")
+  failedAt     DateTime @default(now()) @map("failed_at")
+
+  @@index([failedAt(sort: Desc)])
+  @@map("permanent_failures")
+}
