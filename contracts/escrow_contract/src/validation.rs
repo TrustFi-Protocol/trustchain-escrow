@@ -156,16 +156,80 @@ mod tests {
         assert!(validate_signer_count(MAX_BUYER_SIGNERS + 1).is_err());
     }
 
-    /// #662: `validate_amount` takes no caller, so it must not require auth;
-    /// zero and the numeric extremes return the crate's error, not a panic.
+    // ── Caller and bound checks (#663–#666) ─────────────────────────────────
+    // None of these helpers takes a caller, so each test also asserts that no
+    // authorization was required.
+
+    use soroban_sdk::testutils::Ledger;
+
+    /// #663: `validate_brief_hash` rejects the all-zero hash with the crate's
+    /// error and accepts the all-ones / all-0xFF extremes.
     #[test]
-    fn test_validate_amount_caller_and_bounds() {
+    fn test_validate_brief_hash_caller_and_bounds() {
         let env = Env::default();
-        assert_eq!(validate_amount(1), Ok(()));
-        assert_eq!(validate_amount(MAX_ESCROW_AMOUNT), Ok(()));
-        assert_eq!(validate_amount(0), Err(EscrowError::E17));
-        assert_eq!(validate_amount(i128::MIN), Err(EscrowError::E17));
-        assert_eq!(validate_amount(i128::MAX), Err(EscrowError::E85));
+        assert_eq!(
+            validate_brief_hash(&env, &BytesN::from_array(&env, &[0u8; 32])),
+            Err(EscrowError::InvalidBriefHash)
+        );
+        let mut one = [0u8; 32];
+        one[31] = 1;
+        assert_eq!(validate_brief_hash(&env, &BytesN::from_array(&env, &one)), Ok(()));
+        assert_eq!(
+            validate_brief_hash(&env, &BytesN::from_array(&env, &[u8::MAX; 32])),
+            Ok(())
+        );
+        assert!(env.auths().is_empty());
+    }
+
+    /// #664: `validate_deadline` with 0 and `u64::MAX`, and with the ledger
+    /// clock at `u64::MAX`, returns the crate's error instead of panicking.
+    #[test]
+    fn test_validate_deadline_caller_and_bounds() {
+        let env = Env::default();
+        env.ledger().with_mut(|l| l.timestamp = 1_000);
+        assert_eq!(validate_deadline(&env, None), Ok(()));
+        assert_eq!(validate_deadline(&env, Some(0)), Err(EscrowError::E19));
+        assert_eq!(validate_deadline(&env, Some(1_000)), Err(EscrowError::E19));
+        assert_eq!(validate_deadline(&env, Some(1_001)), Ok(()));
+        assert_eq!(validate_deadline(&env, Some(u64::MAX)), Ok(()));
+
+        env.ledger().with_mut(|l| l.timestamp = u64::MAX);
+        assert_eq!(validate_deadline(&env, Some(u64::MAX)), Err(EscrowError::E19));
+        assert!(env.auths().is_empty());
+    }
+
+    /// #665: `validate_lock_time` with 0 and `u64::MAX`, and with the ledger
+    /// clock at `u64::MAX`, returns the crate's error instead of panicking.
+    #[test]
+    fn test_validate_lock_time_caller_and_bounds() {
+        let env = Env::default();
+        env.ledger().with_mut(|l| l.timestamp = 1_000);
+        assert_eq!(validate_lock_time(&env, None), Ok(()));
+        assert_eq!(validate_lock_time(&env, Some(0)), Err(EscrowError::E30));
+        assert_eq!(validate_lock_time(&env, Some(1_000)), Err(EscrowError::E30));
+        assert_eq!(validate_lock_time(&env, Some(1_001)), Ok(()));
+        assert_eq!(validate_lock_time(&env, Some(u64::MAX)), Ok(()));
+
+        env.ledger().with_mut(|l| l.timestamp = u64::MAX);
+        assert_eq!(validate_lock_time(&env, Some(u64::MAX)), Err(EscrowError::E30));
+        assert!(env.auths().is_empty());
+    }
+
+    /// #666: `validate_title` at length 0, 1, `MAX_TITLE_LENGTH` and one past
+    /// it returns the crate's error instead of panicking.
+    #[test]
+    fn test_validate_title_caller_and_bounds() {
+        let env = Env::default();
+        let bytes = [b'a'; MAX_TITLE_LENGTH as usize + 1];
+        let title = |len: usize| String::from_str(&env, core::str::from_utf8(&bytes[..len]).unwrap());
+
+        assert_eq!(validate_title(&title(0)), Err(EscrowError::E55));
+        assert_eq!(validate_title(&title(1)), Ok(()));
+        assert_eq!(validate_title(&title(MAX_TITLE_LENGTH as usize)), Ok(()));
+        assert_eq!(
+            validate_title(&title(MAX_TITLE_LENGTH as usize + 1)),
+            Err(EscrowError::E55)
+        );
         assert!(env.auths().is_empty());
     }
 }
