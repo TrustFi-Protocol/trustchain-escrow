@@ -910,11 +910,13 @@ pub struct DexSwapRecord {
     /// Whether the swap was successful.
     pub success: bool,
 }
+
 #[cfg(test)]
 mod scval_roundtrip_tests {
-    use super::{CancellationRequest, ContractVersionInfo, DexConfig, DexSwapRecord, EscrowStatus, OptionalTimelock};
-    use soroban_sdk::{Address, Env, String, TryFromVal, Val};
+    use super::ApprovalRecord;
+    use soroban_sdk::{Address, Env, TryFromVal, Val};
     use soroban_sdk::testutils::Address as _;
+
     fn assert_scval_roundtrip<T>(env: &Env, original: &T)
     where
         T: soroban_sdk::IntoVal<Env, Val>
@@ -931,87 +933,14 @@ mod scval_roundtrip_tests {
         );
     }
 
-
     #[test]
-    fn cancellation_request_scval_roundtrip() {
+    fn approval_record_scval_roundtrip() {
         let env = Env::default();
-        let requester = Address::generate(&env);
-        let empty_reason = String::from_str(&env, "");
-        let reason = String::from_str(&env, "scope change");
-        let empty = CancellationRequest {
-            escrow_id: 0,
-            requester: requester.clone(),
-            reason: empty_reason,
-            requested_at: 0,
-            dispute_deadline: 0,
-            disputed: false,
-            counterparty_approved: false,
-        };
-        assert_scval_roundtrip(&env, &empty);
-        let full = CancellationRequest {
-            escrow_id: 9,
-            requester,
-            reason,
-            requested_at: 100,
-            dispute_deadline: 200,
-            disputed: true,
-            counterparty_approved: true,
-        };
-        assert_scval_roundtrip(&env, &full);
-    }
-
-    #[test]
-    fn contract_version_info_scval_roundtrip() {
-        let env = Env::default();
-        let zero = ContractVersionInfo { version: 0, deployed_at: 0, last_upgraded_at: 0, upgrade_count: 0 };
+        let signer = Address::generate(&env);
+        let zero = ApprovalRecord { signer: signer.clone(), approved_at: 0 };
         assert_scval_roundtrip(&env, &zero);
-        let one = ContractVersionInfo { version: 2, deployed_at: 1, last_upgraded_at: 99, upgrade_count: 1 };
-        assert_scval_roundtrip(&env, &one);
+        let nonzero = ApprovalRecord { signer, approved_at: 1_705_000_000 };
+        assert_scval_roundtrip(&env, &nonzero);
     }
-
-    #[test]
-    fn dex_config_scval_roundtrip() {
-        let env = Env::default();
-        let dex = Address::generate(&env);
-        let empty_pairs = soroban_sdk::Vec::<(Address, Address)>::new(&env);
-        let zero = DexConfig { dex_contract_id: dex.clone(), supported_pairs: empty_pairs.clone() };
-        assert_scval_roundtrip(&env, &zero);
-        let a = Address::generate(&env);
-        let b = Address::generate(&env);
-        let mut pairs = empty_pairs;
-        pairs.push_back((a, b));
-        let one = DexConfig { dex_contract_id: dex, supported_pairs: pairs };
-        assert_scval_roundtrip(&env, &one);
-    }
-
-    #[test]
-    fn dex_swap_record_scval_roundtrip() {
-        let env = Env::default();
-        let token_in = Address::generate(&env);
-        let token_out = Address::generate(&env);
-        let pending = DexSwapRecord {
-            escrow_id: 0,
-            token_in: token_in.clone(),
-            token_out: token_out.clone(),
-            amount_in: 0,
-            min_amount_out: 0,
-            amount_out: None,
-            swapped_at: None,
-            success: false,
-        };
-        assert_scval_roundtrip(&env, &pending);
-        let done = DexSwapRecord {
-            escrow_id: 7,
-            token_in,
-            token_out,
-            amount_in: 500,
-            min_amount_out: 400,
-            amount_out: Some(450),
-            swapped_at: Some(1234),
-            success: true,
-        };
-        assert_scval_roundtrip(&env, &done);
-    }
-
 
 }

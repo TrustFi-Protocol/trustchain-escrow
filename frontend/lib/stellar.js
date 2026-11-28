@@ -358,10 +358,19 @@ export async function buildRaiseDisputeTx({ sourceAddress, escrowId, milestoneId
  */
 
 /**
- * Builds an unsigned `cancel_escrow` transaction XDR.
+ * Builds an unsigned `reject_milestone_with_reason` transaction XDR.
  */
-export async function buildCancelEscrowTx({ sourceAddress, escrowId }) {
-  _validateInputs({ sourceAddress, escrowId });
+export async function buildRejectMilestoneTx({
+  sourceAddress,
+  escrowId,
+  milestoneId,
+  reasonHash,
+}) {
+  _validateInputs({ sourceAddress, escrowId, milestoneId });
+
+  if (!/^[a-f0-9]{64}$/i.test(reasonHash || '')) {
+    throw new Error(`Reason hash must be a 32-byte hex string, got: ${reasonHash}`);
+  }
 
   const server = new SorobanRpc.Server(_SOROBAN_RPC_URL);
   const account = await server.getAccount(sourceAddress);
@@ -373,9 +382,11 @@ export async function buildCancelEscrowTx({ sourceAddress, escrowId }) {
 
   txBuilder.addOperation(
     contract.call(
-      'cancel_escrow',
+      'reject_milestone_with_reason',
       new Address(sourceAddress).toScVal(),
       nativeToScVal(BigInt(escrowId), { type: 'u64' }),
+      nativeToScVal(BigInt(milestoneId), { type: 'u32' }),
+      xdr.ScVal.scvTypeBytes(Buffer.from(reasonHash, 'hex')),
     ),
   );
 

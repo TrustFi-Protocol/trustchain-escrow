@@ -270,3 +270,5 @@ Before opening a pull request that adds or modifies a contract function, confirm
 - [ ] All `#[contracttype]` structs have a round-trip serialisation fuzz test (`from_val(env, &to_val(env, &x)) == x`).
 - [ ] If `cargo fuzz` discovered a panic during development, a regression `#[test]` reproducing the exact input has been added and passes after the fix.
 - [ ] All fuzz tests pass with `cargo test` before the pull request is submitted.
+
+- Covered by unit round-trips: `ApprovalRecord`, `AssetAllocation`, `BridgeConfirmation`.
