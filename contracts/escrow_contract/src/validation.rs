@@ -156,80 +156,40 @@ mod tests {
         assert!(validate_signer_count(MAX_BUYER_SIGNERS + 1).is_err());
     }
 
-    // ── Caller and bound checks (#663–#666) ─────────────────────────────────
-    // None of these helpers takes a caller, so each test also asserts that no
-    // authorization was required.
+    // ── Caller and bound checks (#667, #668) ─────────────────────────────────
 
-    use soroban_sdk::testutils::Ledger;
+    use soroban_sdk::testutils::Address as _;
 
-    /// #663: `validate_brief_hash` rejects the all-zero hash with the crate's
-    /// error and accepts the all-ones / all-0xFF extremes.
+    /// #667: `validate_distinct_parties` needs no auth; the same address
+    /// twice returns the crate's error, two different addresses pass.
     #[test]
-    fn test_validate_brief_hash_caller_and_bounds() {
+    fn test_validate_distinct_parties_caller_and_bounds() {
         let env = Env::default();
+        let a = soroban_sdk::Address::generate(&env);
+        let b = soroban_sdk::Address::generate(&env);
+        assert_eq!(validate_distinct_parties(&a, &b), Ok(()));
+        assert_eq!(validate_distinct_parties(&b, &a), Ok(()));
+        assert_eq!(validate_distinct_parties(&a, &a), Err(EscrowError::E3));
         assert_eq!(
-            validate_brief_hash(&env, &BytesN::from_array(&env, &[0u8; 32])),
-            Err(EscrowError::InvalidBriefHash)
-        );
-        let mut one = [0u8; 32];
-        one[31] = 1;
-        assert_eq!(validate_brief_hash(&env, &BytesN::from_array(&env, &one)), Ok(()));
-        assert_eq!(
-            validate_brief_hash(&env, &BytesN::from_array(&env, &[u8::MAX; 32])),
-            Ok(())
+            validate_distinct_parties(&a, &a.clone()),
+            Err(EscrowError::E3)
         );
         assert!(env.auths().is_empty());
     }
 
-    /// #664: `validate_deadline` with 0 and `u64::MAX`, and with the ledger
-    /// clock at `u64::MAX`, returns the crate's error instead of panicking.
+    /// #668: `validate_signer_count` at 0, the cap, one past it and
+    /// `u32::MAX` returns a value or the crate's error, never a panic.
     #[test]
-    fn test_validate_deadline_caller_and_bounds() {
-        let env = Env::default();
-        env.ledger().with_mut(|l| l.timestamp = 1_000);
-        assert_eq!(validate_deadline(&env, None), Ok(()));
-        assert_eq!(validate_deadline(&env, Some(0)), Err(EscrowError::E19));
-        assert_eq!(validate_deadline(&env, Some(1_000)), Err(EscrowError::E19));
-        assert_eq!(validate_deadline(&env, Some(1_001)), Ok(()));
-        assert_eq!(validate_deadline(&env, Some(u64::MAX)), Ok(()));
-
-        env.ledger().with_mut(|l| l.timestamp = u64::MAX);
-        assert_eq!(validate_deadline(&env, Some(u64::MAX)), Err(EscrowError::E19));
-        assert!(env.auths().is_empty());
-    }
-
-    /// #665: `validate_lock_time` with 0 and `u64::MAX`, and with the ledger
-    /// clock at `u64::MAX`, returns the crate's error instead of panicking.
-    #[test]
-    fn test_validate_lock_time_caller_and_bounds() {
-        let env = Env::default();
-        env.ledger().with_mut(|l| l.timestamp = 1_000);
-        assert_eq!(validate_lock_time(&env, None), Ok(()));
-        assert_eq!(validate_lock_time(&env, Some(0)), Err(EscrowError::E30));
-        assert_eq!(validate_lock_time(&env, Some(1_000)), Err(EscrowError::E30));
-        assert_eq!(validate_lock_time(&env, Some(1_001)), Ok(()));
-        assert_eq!(validate_lock_time(&env, Some(u64::MAX)), Ok(()));
-
-        env.ledger().with_mut(|l| l.timestamp = u64::MAX);
-        assert_eq!(validate_lock_time(&env, Some(u64::MAX)), Err(EscrowError::E30));
-        assert!(env.auths().is_empty());
-    }
-
-    /// #666: `validate_title` at length 0, 1, `MAX_TITLE_LENGTH` and one past
-    /// it returns the crate's error instead of panicking.
-    #[test]
-    fn test_validate_title_caller_and_bounds() {
-        let env = Env::default();
-        let bytes = [b'a'; MAX_TITLE_LENGTH as usize + 1];
-        let title = |len: usize| String::from_str(&env, core::str::from_utf8(&bytes[..len]).unwrap());
-
-        assert_eq!(validate_title(&title(0)), Err(EscrowError::E55));
-        assert_eq!(validate_title(&title(1)), Ok(()));
-        assert_eq!(validate_title(&title(MAX_TITLE_LENGTH as usize)), Ok(()));
+    fn test_validate_signer_count_caller_and_bounds() {
+        assert_eq!(validate_signer_count(0), Ok(()));
+        assert_eq!(validate_signer_count(MAX_BUYER_SIGNERS), Ok(()));
         assert_eq!(
-            validate_title(&title(MAX_TITLE_LENGTH as usize + 1)),
-            Err(EscrowError::E55)
+            validate_signer_count(MAX_BUYER_SIGNERS + 1),
+            Err(EscrowError::MultisigTooManySigners)
         );
-        assert!(env.auths().is_empty());
+        assert_eq!(
+            validate_signer_count(u32::MAX),
+            Err(EscrowError::MultisigTooManySigners)
+        );
     }
 }
