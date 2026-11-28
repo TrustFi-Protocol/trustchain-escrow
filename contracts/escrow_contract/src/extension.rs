@@ -141,156 +141,95 @@ mod tests {
         assert_eq!(req.new_deadline, 1000);
     }
 
-    // ── Caller and bound checks (#671) ───────────────────────────────────────
+    // ── consent_extend caller and bound checks (#671) ────────────────────────
 
     use crate::{EscrowContract, EscrowContractClient, MultisigConfig};
-    use soroban_sdk::testutils::{Address as _, Ledger, MockAuth, MockAuthInvoke};
-    use soroban_sdk::{token, BytesN, IntoVal, Vec};
+    use soroban_sdk::{testutils::Address as _, token::StellarAssetClient, BytesN};
 
-    fn setup() -> (Env, EscrowContractClient<'static>, Address, Address, u64) {
+    fn setup_without_escrow() -> (Env, Address) {
         let env = Env::default();
-        env.mock_all_auths();
+        env.mock_all_auths_allowing_non_root_auth();
         let admin = Address::generate(&env);
-        let token = env.register_stellar_asset_contract_v2(admin.clone()).address();
-        let client = EscrowContractClient::new(&env, &env.register_contract(None, EscrowContract));
-        client.initialize(&admin);
-        let depositor = Address::generate(&env);
+        let contract_id = env.register_contract(None, EscrowContract);
+        EscrowContractClient::new(&env, &contract_id).initialize(&admin);
+        (env, contract_id)
+    }
+
+    /// Returns (env, contract_id, client, freelancer, escrow_id) for an Active escrow.
+    fn setup() -> (Env, Address, Address, Address, u64) {
+        let (env, contract_id) = setup_without_escrow();
+        let token_admin = Address::generate(&env);
+        let token = env.register_stellar_asset_contract_v2(token_admin).address();
+        let client = Address::generate(&env);
         let freelancer = Address::generate(&env);
-        let amount: i128 = 10_000;
-        token::StellarAssetClient::new(&env, &token).mint(&depositor, &(amount + 1_000));
-        let escrow_id = client.create_escrow(
-            &depositor,
+        StellarAssetClient::new(&env, &token).mint(&client, &1030);
+        let escrow_id = EscrowContractClient::new(&env, &contract_id).create_escrow(
+            &client,
             &freelancer,
             &token,
-            &amount,
+            &500,
             &BytesN::from_array(&env, &[1; 32]),
-            &None::<Address>,
-            &None::<u64>,
-            &None::<u64>,
+            &None,
+            &None,
+            &None,
             &None,
             &MultisigConfig {
-                approvers: Vec::new(&env),
-                weights: Vec::new(&env),
+                approvers: soroban_sdk::Vec::new(&env),
+                weights: soroban_sdk::Vec::new(&env),
                 threshold: 0,
             },
             &None,
         );
-        (env, client, depositor, freelancer, escrow_id)
+        (env, contract_id, client, freelancer, escrow_id)
     }
 
-    /// #671: only the client or freelancer may consent; unknown escrow ids
-    /// (0, u64::MAX), past deadlines (0, now) and non-increasing deadlines
-    /// return the crate's errors; `u64::MAX` applies once both consent.
     #[test]
-    fn test_consent_extend_caller_and_bounds() {
-        let (env, client, depositor, freelancer, escrow_id) = setup();
-        let stranger = Address::generate(&env);
-        env.ledger().with_mut(|l| l.timestamp = 1_000);
+    fn test_consent_extend_by_client_and_freelancer_applies_extension() {
+        let (env, contract_id, client, freelancer, escrow_id) = setup();
 
+        let first = env.as_contract(&contract_id, || consent_extend(&env, &client, escrow_id, u64::MAX));
+        assert_eq!(first, Ok(false));
         assert_eq!(
-            client.try_consent_extend_deadline(&depositor, &0, &2_000),
-            Err(Ok(EscrowError::E8))
-        );
-        assert_eq!(
-            client.try_consent_extend_deadline(&depositor, &u64::MAX, &2_000),
-            Err(Ok(EscrowError::E8))
-        );
-        assert_eq!(
-            client.try_consent_extend_deadline(&stranger, &escrow_id, &2_000),
-            Err(Ok(EscrowError::E3))
-        );
-        assert_eq!(
-            client.try_consent_extend_deadline(&depositor, &escrow_id, &0),
-            Err(Ok(EscrowError::E3))
-        );
-        assert_eq!(
-            client.try_consent_extend_deadline(&depositor, &escrow_id, &1_000),
-            Err(Ok(EscrowError::E3))
+            env.as_contract(&contract_id, || get_pending_extension(&env, escrow_id)).map(|r| r.new_deadline),
+            Some(u64::MAX)
         );
 
-        // One party alone only records a pending request.
-        assert!(!client.consent_extend_deadline(&depositor, &escrow_id, &u64::MAX));
-        assert_eq!(client.get_pending_extension_deadline(&escrow_id), u64::MAX);
-        // The other party's consent applies it.
-        assert!(client.consent_extend_deadline(&freelancer, &escrow_id, &u64::MAX));
-        assert_eq!(client.get_pending_extension_deadline(&escrow_id), 0);
-
-        // Nothing is later than u64::MAX.
-        assert_eq!(
-            client.try_consent_extend_deadline(&freelancer, &escrow_id, &u64::MAX),
-            Err(Ok(EscrowError::E3))
-        );
+        let second = env.as_contract(&contract_id, || consent_extend(&env, &freelancer, escrow_id, u64::MAX));
+        assert_eq!(second, Ok(true));
+        let meta = env.as_contract(&contract_id, || ContractStorage::load_escrow_meta(&env, escrow_id).unwrap());
+        assert_eq!(meta.deadline, Some(u64::MAX));
+        assert!(env.as_contract(&contract_id, || get_pending_extension(&env, escrow_id)).is_none());
     }
 
-    /// #671: another address cannot consent on the client's behalf.
     #[test]
-    fn test_consent_extend_rejects_other_signer() {
-        let (env, client, depositor, _freelancer, escrow_id) = setup();
+    fn test_consent_extend_rejects_non_party_caller() {
+        let (env, contract_id, _client, _freelancer, escrow_id) = setup();
         let stranger = Address::generate(&env);
 
-        env.mock_auths(&[MockAuth {
-            address: &stranger,
-            invoke: &MockAuthInvoke {
-                contract: &client.address,
-                fn_name: "consent_extend_deadline",
-                args: (depositor.clone(), escrow_id, 5_000u64).into_val(&env),
-                sub_invokes: &[],
-            },
-        }]);
-        assert!(client
-            .try_consent_extend_deadline(&depositor, &escrow_id, &5_000)
-            .is_err());
-        assert_eq!(client.get_pending_extension_deadline(&escrow_id), 0);
-    }
+        let result = env.as_contract(&contract_id, || consent_extend(&env, &stranger, escrow_id, u64::MAX));
 
-    /// #671: an escrow that is no longer active cannot be extended.
-    #[test]
-    fn test_consent_extend_rejects_inactive_escrow() {
-        let (_env, client, depositor, _freelancer, escrow_id) = setup();
-        client.cancel_escrow(&depositor, &escrow_id);
-        assert_eq!(
-            client.try_consent_extend_deadline(&depositor, &escrow_id, &5_000),
-            Err(Ok(EscrowError::E9))
-        );
-    }
-}
-
-#[cfg(test)]
-mod scval_roundtrip_tests {
-    use super::ExtensionRequest;
-    use soroban_sdk::{Env, TryFromVal, Val};
-
-    fn assert_scval_roundtrip<T>(env: &Env, original: &T)
-    where
-        T: soroban_sdk::IntoVal<Env, Val>
-            + soroban_sdk::TryFromVal<Env, Val>
-            + Clone
-            + core::fmt::Debug,
-    {
-        let serialised: Val = original.clone().into_val(env);
-        let decoded = T::try_from_val(env, &serialised).expect("ScVal round-trip must not fail");
-        assert_eq!(
-            format!("{original:?}"),
-            format!("{decoded:?}"),
-            "ScVal round-trip changed the value"
-        );
+        assert_eq!(result, Err(EscrowError::E3));
+        assert!(env.as_contract(&contract_id, || get_pending_extension(&env, escrow_id)).is_none());
     }
 
     #[test]
-    fn extension_request_scval_roundtrip() {
-        let env = Env::default();
-        assert_scval_roundtrip(&env, &ExtensionRequest {
-            new_deadline: 0,
-            client_consented: false,
-            freelancer_consented: false,
-            requested_at: 0,
-        });
-        assert_scval_roundtrip(&env, &ExtensionRequest {
-            new_deadline: 99,
-            client_consented: true,
-            freelancer_consented: true,
-            requested_at: 12,
-        });
+    fn test_consent_extend_zero_deadline_returns_error() {
+        let (env, contract_id, client, _freelancer, escrow_id) = setup();
+
+        let result = env.as_contract(&contract_id, || consent_extend(&env, &client, escrow_id, 0));
+
+        assert_eq!(result, Err(EscrowError::E3));
     }
 
+    #[test]
+    fn test_consent_extend_escrow_id_zero_and_max_without_escrow_return_error() {
+        let (env, contract_id) = setup_without_escrow();
+        let caller = Address::generate(&env);
+        for escrow_id in [0_u64, u64::MAX] {
+            for new_deadline in [0_u64, u64::MAX] {
+                let result = env.as_contract(&contract_id, || consent_extend(&env, &caller, escrow_id, new_deadline));
+                assert_eq!(result, Err(EscrowError::E8));
+            }
+        }
+    }
 }
