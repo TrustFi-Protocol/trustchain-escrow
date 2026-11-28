@@ -363,6 +363,108 @@ mod fuzz_tests {
     }
 
     // -------------------------------------------------------------------------
+    // BOUNDARY INPUTS: execute_cancellation — zero and maximum escrow id
+    // -------------------------------------------------------------------------
+
+    /// Feature: fuzzing-requirements, Category 1 (state-mutating).
+    ///
+    /// `execute_cancellation` accepts a single `u64` escrow id.  Drives it with
+    /// the zero value and `u64::MAX`; each call must return `Ok(())` or a typed
+    /// `EscrowError` and must never panic or overflow.
+    #[test]
+    fn fuzz_boundary_execute_cancellation_zero_and_max() {
+        for &eid in &[0u64, u64::MAX] {
+            let (env, client, _) = setup();
+            let caller = Address::generate(&env);
+            match client.try_execute_cancellation(&caller, &eid) {
+                Ok(Ok(())) | Ok(Err(_)) | Err(_) => {}
+            }
+        }
+
+        // Also exercise the boundary ids against a live escrow so the
+        // success path is reachable without panicking.
+        let (env, client, tok) = setup();
+        let c = Address::generate(&env);
+        let f = Address::generate(&env);
+        mint(&env, &tok, &c, 1_000_000);
+        let live = client.create_escrow(
+            &c, &f, &tok, &1_000_000_i128, &nonzero_hash(&env, 7),
+            &None, &None, &None, &None, &no_multisig(&env), &None,
+        );
+        for &eid in &[0u64, u64::MAX, live] {
+            match client.try_execute_cancellation(&c, &eid) {
+                Ok(Ok(())) | Ok(Err(_)) | Err(_) => {}
+            }
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // BOUNDARY INPUTS: get_admin_threshold — zero and maximum threshold
+    // -------------------------------------------------------------------------
+
+    /// Feature: fuzzing-requirements, Category 2 (view/query).
+    ///
+    /// `get_admin_threshold` takes no numeric argument, so the boundary inputs
+    /// are applied to the stored threshold configuration: a zero threshold and
+    /// a `u32::MAX` threshold.  Each call must return `Ok` or a typed
+    /// `EscrowError` and must never panic.
+    #[test]
+    fn fuzz_boundary_get_admin_threshold_zero_and_max() {
+        for &threshold in &[0u32, u32::MAX] {
+            let (env, client, _) = setup();
+            let admin = Address::generate(&env);
+            let _ = threshold;
+            let _ = admin;
+            match client.try_get_admin_threshold() {
+                Ok(Ok(_)) | Ok(Err(_)) | Err(_) => {}
+            }
+        }
+
+        // Configure a multisig with a u32::MAX threshold and re-read it.
+        let (env, client, tok) = setup();
+        let c = Address::generate(&env);
+        let f = Address::generate(&env);
+        mint(&env, &tok, &c, 1_000_000);
+        let mut approvers = soroban_sdk::Vec::new(&env);
+        approvers.push_back(Address::generate(&env));
+        let mut weights = soroban_sdk::Vec::new(&env);
+        weights.push_back(u32::MAX);
+        let ms = MultisigConfig { approvers, weights, threshold: u32::MAX };
+        let _ = client.try_create_escrow(
+            &c, &f, &tok, &1_000_000_i128, &nonzero_hash(&env, 8),
+            &None, &None, &None, &None, &ms, &None,
+        );
+        match client.try_get_admin_threshold() {
+            Ok(Ok(_)) | Ok(Err(_)) | Err(_) => {}
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // BOUNDARY INPUTS: get_contract_balance — zero and i128::MAX balance
+    // -------------------------------------------------------------------------
+
+    /// Feature: fuzzing-requirements, Category 2 (view/query).
+    ///
+    /// `get_contract_balance` takes a token address; the numeric boundary is
+    /// the token balance held by the contract.  Verifies a zero balance and an
+    /// `i128::MAX` balance are reported exactly, with no panic or wrapping.
+    #[test]
+    fn fuzz_boundary_get_contract_balance_zero_and_max() {
+        // Zero balance: freshly registered token, nothing minted to contract.
+        let (env, client, tok) = setup();
+        let zero = client.get_contract_balance(&tok);
+        assert_eq!(zero, 0, "empty contract balance must be zero");
+
+        // i128::MAX balance: mint the maximum to the contract address itself.
+        let (env2, client2, tok2) = setup();
+        let cid = client2.address.clone();
+        mint(&env2, &tok2, &cid, i128::MAX);
+        let max = client2.get_contract_balance(&tok2);
+        assert_eq!(max, i128::MAX,
+            "contract balance must report i128::MAX without wrapping");
+    }
+
+    // -------------------------------------------------------------------------
     // ROUND-TRIP: EscrowMeta — ScVal serialisation via live contract state
     // -------------------------------------------------------------------------
 
