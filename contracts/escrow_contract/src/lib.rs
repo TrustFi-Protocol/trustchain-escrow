@@ -75,6 +75,7 @@ mod dispute_evidence_tests;
 mod dispute_slash_boundary_tests;
 mod errors;
 mod escrow_template_tests;
+mod escrow_count_boundary_tests;
 mod event_names;
 mod event_tests;
 mod events;
