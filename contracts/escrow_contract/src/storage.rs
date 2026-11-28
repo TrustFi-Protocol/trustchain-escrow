@@ -328,6 +328,30 @@ mod tests {
         // The function signature verifies the type exists
     }
 
+    /// `get_version` takes no caller and no numeric argument, so there is no
+    /// authorization or input to reject; it must never panic and returns the
+    /// stored value (1 when unset, the legacy default).
+    #[test]
+    fn test_get_version_default_init_and_extremes() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, crate::EscrowContract);
+
+        env.as_contract(&contract_id, || {
+            // Uninitialized -> legacy default of 1.
+            assert_eq!(StorageManager::get_version(&env), 1);
+
+            // After init -> current storage version.
+            StorageManager::init_version(&env);
+            assert_eq!(StorageManager::get_version(&env), STORAGE_VERSION);
+
+            // Stored extremes round-trip without panicking.
+            StorageManager::set_version(&env, 0);
+            assert_eq!(StorageManager::get_version(&env), 0);
+            StorageManager::set_version(&env, u32::MAX);
+            assert_eq!(StorageManager::get_version(&env), u32::MAX);
+        });
+    }
+
     fn v1_milestone(env: &Env, id: u32, amount: i128) -> Milestone {
         Milestone {
             id,
