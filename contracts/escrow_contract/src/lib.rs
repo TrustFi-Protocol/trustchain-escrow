@@ -64,7 +64,7 @@ mod auto_expiry_tests;
 mod trigger_expiry_boundary_tests;
 mod batch_add_milestones_cap_tests;
 mod batch_approve_release_e2e_tests;
-mod boundary_view_tests;
+mod boundary_input_tests;
 mod bridge;
 mod bridge_tests;
 mod collect_rent_boundary_tests;
