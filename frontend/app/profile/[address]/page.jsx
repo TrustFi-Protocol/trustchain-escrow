@@ -3,16 +3,6 @@ import Badge from '../../../components/ui/Badge';
 import TruncatedAddress from '../../../components/ui/TruncatedAddress';
 import Button from '../../../components/ui/Button';
 
-const PLACEHOLDER_USER = {
-  reputationScore: 87,
-  badge: 'TRUSTED',
-  completedEscrows: 12,
-  disputedEscrows: 1,
-  totalVolume: '18,450 USDC',
-  memberSince: 'January 2025',
-  completionRate: 92,
-};
-
 async function getProfile(address) {
   try {
     const base = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
@@ -24,10 +14,30 @@ async function getProfile(address) {
   }
 }
 
+function StatBlock({ label, value }) {
+  if (value === undefined || value === null || value === '') return null;
+  return (
+    <div>
+      <p className="text-gray-500">{label}</p>
+      <p className="text-white font-semibold">{value}</p>
+    </div>
+  );
+}
+
 export default async function ProfilePage({ params }) {
   const { address } = params;
-  const dbUser = (await getProfile(address)) || {};
-  const user = { ...PLACEHOLDER_USER, ...dbUser };
+  const profile = await getProfile(address);
+
+  if (!profile || Object.keys(profile).length === 0) {
+    return (
+      <div className="card max-w-3xl mx-auto text-center space-y-3">
+        <h1 className="text-xl font-bold text-white font-mono">
+          <TruncatedAddress address={address} />
+        </h1>
+        <p className="text-gray-400">No profile data is available for this address yet.</p>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-8 max-w-3xl mx-auto">
@@ -41,41 +51,40 @@ export default async function ProfilePage({ params }) {
             <h1 className="text-xl font-bold text-white font-mono">
               <TruncatedAddress address={address} />
             </h1>
-            <Badge status={user.badge} />
+            {profile.badge && <Badge status={profile.badge} />}
           </div>
 
-          {user.bio && <p className="text-gray-300 mt-2">{user.bio}</p>}
-          <p className="text-gray-500 text-sm mt-1">Member since {user.memberSince}</p>
+          {profile.bio && <p className="text-gray-300 mt-2">{profile.bio}</p>}
+          {profile.memberSince && (
+            <p className="text-gray-500 text-sm mt-1">Member since {profile.memberSince}</p>
+          )}
 
-          <div className="flex gap-6 mt-4 text-sm">
-            <div>
-              <p className="text-gray-500">Completed</p>
-              <p className="text-white font-semibold">{user.completedEscrows}</p>
-            </div>
-            <div>
-              <p className="text-gray-500">Disputed</p>
-              <p className="text-white font-semibold">{user.disputedEscrows}</p>
-            </div>
-            <div>
-              <p className="text-gray-500">Volume</p>
-              <p className="text-white font-semibold">{user.totalVolume}</p>
-            </div>
-            <div>
-              <p className="text-gray-500">Completion Rate</p>
-              <p className="text-white font-semibold">{user.completionRate}%</p>
-            </div>
+          <div className="flex gap-6 mt-4 text-sm flex-wrap">
+            <StatBlock label="Completed" value={profile.completedEscrows} />
+            <StatBlock label="Disputed" value={profile.disputedEscrows} />
+            <StatBlock label="Volume" value={profile.totalVolume} />
+            <StatBlock
+              label="Completion Rate"
+              value={
+                profile.completionRate !== undefined && profile.completionRate !== null
+                  ? `${profile.completionRate}%`
+                  : undefined
+              }
+            />
           </div>
         </div>
 
-        <div className="text-center">
-          <ReputationBadge score={user.reputationScore} size="lg" />
-          <p className="text-xs text-gray-500 mt-1">Reputation Score</p>
-          <div className="mt-3">
-            <Button variant="secondary" size="sm">
-              Share Profile
-            </Button>
+        {profile.reputationScore !== undefined && (
+          <div className="text-center">
+            <ReputationBadge score={profile.reputationScore} size="lg" />
+            <p className="text-xs text-gray-500 mt-1">Reputation Score</p>
+            <div className="mt-3">
+              <Button variant="secondary" size="sm">
+                Share Profile
+              </Button>
+            </div>
           </div>
-        </div>
+        )}
       </div>
     </div>
   );
